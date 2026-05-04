@@ -1,6 +1,6 @@
 # attest-service
 
-Unified attestation layer for autonomous agent commerce. Accepts a single request,
+Single-call verification for agent execution integrity. Accepts a single request,
 runs pre-execution continuity evaluation and post-execution settlement verification
 in sequence, and returns both signed receipts with a cryptographic chain binding.
 
