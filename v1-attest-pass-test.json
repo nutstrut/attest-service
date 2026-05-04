@@ -1,0 +1,55 @@
+{
+  "continuity_input": {
+    "schema_version": "0.1",
+    "subject": {
+      "subject_id": "subj-pass-1",
+      "subject_type": "agent"
+    },
+    "receipts": [
+      {
+        "receipt_id": "pass-root-1",
+        "issuer": "test-root",
+        "signal_type": "governance_attestation",
+        "digest": "d-pass-1",
+        "prior_signal_digest": null,
+        "canonicalization_profile": "JCS",
+        "signed_payload": {},
+        "signature": {}
+      }
+    ],
+    "execution_path": {
+      "action_id": "act-pass-1",
+      "requested_action": {
+        "target_id": "resource-pass-A",
+        "amount": 100
+      },
+      "admitted_action": {
+        "target_id": "resource-pass-A",
+        "amount": 100
+      },
+      "executed_action": {
+        "target_id": "resource-pass-A",
+        "amount": 100
+      },
+      "mutation_boundary_ts": "2026-05-04T15:10:00Z",
+      "executor_id": "executor-pass-1",
+      "execution_environment": null
+    },
+    "mutation_events": [],
+    "evaluation_context": {
+      "evaluated_at": "2026-05-04T15:10:00Z",
+      "policy_ref": null,
+      "expected_verifier_id": "defaultverifier-continuity-v1"
+    }
+  },
+  "sar_input": {
+    "task_id": "v1-attest-pass-test-001",
+    "spec": {
+      "expected": "foo"
+    },
+    "output": {
+      "expected": "foo"
+    },
+    "counterparty": "test-wallet:test-agent"
+  }
+}

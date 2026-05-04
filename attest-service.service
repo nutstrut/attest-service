@@ -1,0 +1,13 @@
+[Unit]
+Description=Attest Orchestrator Service
+After=network.target
+
+[Service]
+User=ubuntu
+WorkingDirectory=/home/ubuntu/attest-service
+ExecStart=/home/ubuntu/.local/bin/uvicorn attest_service:app --host 0.0.0.0 --port 3004
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
