@@ -18,17 +18,21 @@ Returns:
 
 ## Quick Start
 
+```bash
 curl -X POST https://defaultverifier.com/v1/attest \
   -H "Content-Type: application/json" \
   --data @v1-attest-pass-test.json
+```
 
 See v1-attest-pass-test.json for a working request payload.
 
 ## Architecture
 
+```text
 attest-service (:3004)
-→ continuity-analyzer (:3002)
-→ settlement-witness (:3001)
+  → continuity-analyzer (:3002)
+  → settlement-witness (:3001)
+```
 
 ## Deployment
 
