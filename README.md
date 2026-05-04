@@ -50,3 +50,9 @@ location /v1/attest {
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
 }
+
+## Example Payloads
+
+- `v1-attest-pass-test.json` — all continuity predicates pass, SAR returns PASS
+- `v1-attest-partial-fail-test.json` — executor_continuity fails, SAR returns FAIL
+
