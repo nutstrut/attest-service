@@ -1,0 +1,10 @@
+{
+  "agent_id": "agent:demo-alpha",
+  "owner_id": "wallet:demo-owner",
+  "counterparty": "wallet:demo-owner:agent-alpha",
+  "display_name": "Agent Alpha",
+  "metadata": {
+    "model": "demo-agent-v1",
+    "environment": "sandbox"
+  }
+}

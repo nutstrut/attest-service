@@ -1,0 +1,41 @@
+{
+  "receipt_context": "activation_demo",
+  "continuity_input": {
+    "schema_version": "0.1",
+    "subject": {
+      "subject_id": "agent:demo-alpha",
+      "subject_type": "agent"
+    },
+    "receipts": [],
+    "execution_path": {
+      "action_id": "activate-demo-alpha-001",
+      "requested_action": {
+        "operation": "activate_agent"
+      },
+      "admitted_action": {
+        "operation": "activate_agent"
+      },
+      "executed_action": {
+        "operation": "activate_agent"
+      },
+      "mutation_boundary_ts": "2026-05-31T18:02:00Z",
+      "executor_id": "defaultverifier-activation-v1",
+      "execution_environment": "sandbox"
+    },
+    "mutation_events": [],
+    "evaluation_context": {
+      "evaluated_at": "2026-05-31T18:02:00Z",
+      "policy_ref": "agent-activation-v1",
+      "expected_verifier_id": "defaultverifier-continuity-v1"
+    }
+  },
+  "activation_spec": {
+    "expected_stage": "activated"
+  },
+  "activation_output": {
+    "stage": "activated"
+  },
+  "metadata": {
+    "demo": true
+  }
+}

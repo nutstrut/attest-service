@@ -1,0 +1,37 @@
+{
+  "receipt_context": "continuity_pair",
+  "previous_activation_id": "activation:replace-with-activation-id",
+  "previous_chain_id": "sha256:replace-with-chain-id",
+  "continuity_input": {
+    "schema_version": "0.1",
+    "subject": {
+      "subject_id": "agent:demo-alpha",
+      "subject_type": "agent"
+    },
+    "receipts": [],
+    "execution_path": {
+      "action_id": "continuity-pair-demo-alpha-001",
+      "requested_action": {
+        "operation": "prove_continuity"
+      },
+      "admitted_action": {
+        "operation": "prove_continuity"
+      },
+      "executed_action": {
+        "operation": "prove_continuity"
+      },
+      "mutation_boundary_ts": "2026-05-31T18:10:00Z",
+      "executor_id": "defaultverifier-continuity-pair-v1",
+      "execution_environment": "sandbox"
+    },
+    "mutation_events": [],
+    "evaluation_context": {
+      "evaluated_at": "2026-05-31T18:10:00Z",
+      "policy_ref": "agent-continuity-pair-v1",
+      "expected_verifier_id": "defaultverifier-continuity-v1"
+    }
+  },
+  "metadata": {
+    "source": "explorer-demo"
+  }
+}
