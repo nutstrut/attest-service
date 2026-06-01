@@ -111,10 +111,17 @@ Default Settlement visual style.
 Shows existing Explorer metrics and recent receipts, plus:
 
 - `registered_agents_total`
-- `activated_agents_total`
+- `activation_attempts_total`
+- `activation_success_total`
+- `activation_failed_total`
+- `activation_success_rate`
 - `verified_agents_total`
-- `activation_conversion_rate`
 - `chains_total`
+
+Legacy aliases are returned temporarily for compatibility:
+
+- `activated_agents_total` maps to `activation_attempts_total`
+- `activation_conversion_rate` maps to `activation_success_rate`
 
 ### Agents
 
@@ -224,15 +231,31 @@ Shows the exact output of:
 GET /v1/explorer/metrics
 ```
 
+Metric definitions:
+
+- `registered_agents_total`: unique agents with registry records.
+- `activation_attempts_total`: total activation records, including failed and successful attempts.
+- `activation_success_total`: activation records that completed successfully and reached `verified`, `chained`, or `continuous`.
+- `activation_failed_total`: activation records with failed status / `activation_failed`.
+- `activation_success_rate`: `activation_success_total / activation_attempts_total`, or `0` when there are no attempts.
+- `verified_agents_total`: unique agents with successful SAR PASS-backed activation or higher.
+- `chains_total`: unique non-null `chain_id` values.
+- `activated_agents_total`: legacy alias for `activation_attempts_total`.
+- `activation_conversion_rate`: legacy alias for `activation_success_rate`.
+
 Example:
 
 ```json
 {
   "registered_agents_total": 100,
-  "activated_agents_total": 72,
+  "activation_attempts_total": 80,
+  "activation_success_total": 64,
+  "activation_failed_total": 16,
+  "activation_success_rate": 0.8,
   "verified_agents_total": 64,
-  "activation_conversion_rate": 0.72,
   "chains_total": 81,
+  "activated_agents_total": 80,
+  "activation_conversion_rate": 0.8,
   "generated_at": "2026-05-31T18:15:00Z"
 }
 ```

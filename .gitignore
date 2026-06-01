@@ -2,3 +2,8 @@ __pycache__/
 *.pyc
 .env
 *.log
+*_master.jsonl
+v1-agent-register-test-*.json
+tmp-*.json
+evidence.json
+hermes-vps-*.json

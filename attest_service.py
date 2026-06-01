@@ -1075,15 +1075,27 @@ def explorer_metrics():
     for record in read_jsonl(AGENT_LEDGER):
         agents_by_id[record["agent_id"]] = record
     agents = list(agents_by_id.values())
-    registered_agents_total = len(agents)
-    activated_agents_total = sum(1 for agent in agents if stage_at_least(agent.get("activation_stage", "registered"), "activated"))
-    verified_agents_total = sum(1 for agent in agents if stage_at_least(agent.get("activation_stage", "registered"), "verified"))
+    activation_records_by_id: dict[str, dict[str, Any]] = {}
+    for record in read_jsonl(ACTIVATION_LEDGER):
+        activation_id = record.get("activation_id")
+        if activation_id:
+            activation_records_by_id[activation_id] = record
+    activation_records = list(activation_records_by_id.values())
+    activation_success_total = sum(1 for record in activation_records if stage_at_least(record.get("activation_stage") or record.get("stage", "registered"), "verified") and record.get("status") != "failed")
+    activation_failed_total = sum(1 for record in activation_records if record.get("status") == "failed" or record.get("status") == "activation_failed")
+    activation_attempts_total = len(activation_records)
+    verified_agents_total = sum(1 for agent in agents if stage_at_least(agent.get("activation_stage", "registered"), "verified") and agent.get("status") != "activation_failed")
     chain_ids = {chain.get("chain_id") for chain in read_jsonl(CHAIN_LEDGER) if chain.get("chain_id")}
+    activation_success_rate = activation_success_total / activation_attempts_total if activation_attempts_total else 0
     return {
-        "registered_agents_total": registered_agents_total,
-        "activated_agents_total": activated_agents_total,
+        "registered_agents_total": len(agents),
+        "activation_attempts_total": activation_attempts_total,
+        "activation_success_total": activation_success_total,
+        "activation_failed_total": activation_failed_total,
+        "activation_success_rate": activation_success_rate,
         "verified_agents_total": verified_agents_total,
-        "activation_conversion_rate": activated_agents_total / registered_agents_total if registered_agents_total else 0,
         "chains_total": len(chain_ids),
+        "activated_agents_total": activation_attempts_total,
+        "activation_conversion_rate": activation_success_rate,
         "generated_at": iso_now(),
     }
