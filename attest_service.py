@@ -359,6 +359,25 @@ def sar_reason_code(sar: dict[str, Any]) -> Any:
     return first_present(sar, ["reason_code", "reason"]) or nested_value(sar, ["receipt_v0_1", "reason_code"])
 
 
+def activation_sar_claim(
+    *,
+    agent_id: str,
+    activation_id: str,
+    receipt_context: str,
+    continuity_receipt_id: str,
+    activation_spec: dict[str, Any],
+    activation_output: dict[str, Any],
+) -> dict[str, Any]:
+    stage = activation_output.get("stage") or activation_spec.get("stage") or "activated"
+    return {
+        "agent_id": agent_id,
+        "activation_id": activation_id,
+        "stage": stage,
+        "receipt_context": receipt_context,
+        "continuity_receipt_id": continuity_receipt_id,
+    }
+
+
 def is_sar_pass(sar: dict[str, Any]) -> bool:
     verdict = sar_verdict_value(sar)
     return str(verdict).upper() == "PASS"
@@ -621,20 +640,20 @@ def activate_agent(agent_id: str, input: ActivateAgentInput):
     if not continuity_receipt_id:
         raise HTTPException(status_code=502, detail="continuity receipt_id missing")
 
+    sar_claim = activation_sar_claim(
+        agent_id=agent_id,
+        activation_id=activation_id,
+        receipt_context=input.receipt_context,
+        continuity_receipt_id=continuity_receipt_id,
+        activation_spec=input.activation_spec,
+        activation_output=input.activation_output,
+    )
+    sar_spec = sar_claim if input.receipt_context == "activation_demo" else input.activation_spec
+    sar_output = dict(sar_claim) if input.receipt_context == "activation_demo" else input.activation_output
     sar_payload = {
         "task_id": activation_id,
-        "spec": {
-            "activation_id": activation_id,
-            "agent_id": agent_id,
-            "expected_stage": "activated",
-            "activation_spec": input.activation_spec,
-            "continuity_receipt_id": continuity_receipt_id,
-        },
-        "output": {
-            "agent_id": agent_id,
-            "activation_stage": "activated",
-            "activation_output": input.activation_output,
-        },
+        "spec": sar_spec,
+        "output": sar_output,
         "counterparty": agent["counterparty"],
         "agent_id": agent_id,
         "activation_id": activation_id,
