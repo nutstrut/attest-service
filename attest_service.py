@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import time
@@ -305,6 +306,17 @@ def chain_lookup(chain_id: str) -> dict[str, Any]:
         return {"chain_id": chain_id, "chain_status": "lookup_unavailable"}
 
 
+def activation_continuity_input(continuity_input: dict[str, Any], agent_id: str) -> dict[str, Any]:
+    payload = copy.deepcopy(continuity_input)
+    subject = payload.get("subject")
+    if not isinstance(subject, dict):
+        subject = {}
+    subject["subject_id"] = agent_id
+    subject["subject_type"] = subject.get("subject_type") or "agent"
+    payload["subject"] = subject
+    return payload
+
+
 def first_present(record: dict[str, Any], keys: list[str]) -> Any:
     for key in keys:
         value = record.get(key)
@@ -603,7 +615,8 @@ def activate_agent(agent_id: str, input: ActivateAgentInput):
         to_stage="activated",
     )
 
-    continuity = post_json(CONTINUITY_EVALUATE_URL, input.continuity_input)
+    continuity_input = activation_continuity_input(input.continuity_input, agent_id)
+    continuity = post_json(CONTINUITY_EVALUATE_URL, continuity_input)
     continuity_receipt_id = continuity.get("receipt_id")
     if not continuity_receipt_id:
         raise HTTPException(status_code=502, detail="continuity receipt_id missing")
@@ -840,7 +853,8 @@ def record_continuity_pair(agent_id: str, input: ContinuityPairInput):
     if not stage_at_least(agent.get("activation_stage", "registered"), "verified"):
         raise HTTPException(status_code=409, detail="agent must be verified or chained before continuity can be recorded")
 
-    continuity = post_json(CONTINUITY_EVALUATE_URL, input.continuity_input)
+    continuity_input = activation_continuity_input(input.continuity_input, agent_id)
+    continuity = post_json(CONTINUITY_EVALUATE_URL, continuity_input)
     continuity_receipt_id = continuity.get("receipt_id")
     if not continuity_receipt_id:
         raise HTTPException(status_code=502, detail="continuity receipt_id missing")

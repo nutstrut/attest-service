@@ -3,12 +3,12 @@
   "continuity_input": {
     "schema_version": "0.1",
     "subject": {
-      "subject_id": "agent:demo-alpha",
+      "subject_id": "agent:replace-with-path-agent-id",
       "subject_type": "agent"
     },
     "receipts": [],
     "execution_path": {
-      "action_id": "activate-demo-alpha-001",
+      "action_id": "activate-agent-demo-001",
       "requested_action": {
         "operation": "activate_agent"
       },
