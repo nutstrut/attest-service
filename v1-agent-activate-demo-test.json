@@ -20,7 +20,7 @@
       },
       "mutation_boundary_ts": "2026-05-31T18:02:00Z",
       "executor_id": "defaultverifier-activation-v1",
-      "execution_environment": "sandbox"
+      "execution_environment": {"name": "sandbox"}
     },
     "mutation_events": [],
     "evaluation_context": {
@@ -30,7 +30,7 @@
     }
   },
   "activation_spec": {
-    "expected_stage": "activated"
+    "stage": "activated"
   },
   "activation_output": {
     "stage": "activated"
