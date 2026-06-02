@@ -1,12 +1,23 @@
 # attest-service
 
-Single-call verification and Agent Activation Flow orchestration for agent
-execution integrity. The service runs pre-execution continuity evaluation,
-post-execution settlement verification, and stores public evidence records for
-Explorer v1.
+Default Settlement is machine trust infrastructure for autonomous systems.
+`attest-service` is the API service for agent activation, registry records,
+attestation intake, chain creation, and evidence routing.
+
+The service accepts and verifies evidence inputs, manages agent registry state,
+routes SAR and Continuity evidence, and exposes chain and agent endpoints. It
+runs pre-execution continuity evaluation, post-execution settlement
+verification, and stores public evidence records for Explorer v1.
 
 Part of the DefaultVerifier infrastructure alongside settlement-witness and
 continuity-analyzer.
+
+Public surfaces:
+
+- Start: https://defaultverifier.com/start
+- Explorer: https://defaultverifier.com/explorer
+- Specs: https://defaultverifier.com/spec
+- Badge verification: https://defaultverifier.com
 
 ## Architecture
 
@@ -14,6 +25,12 @@ continuity-analyzer.
 attest-service (:3004)
   -> continuity-analyzer (:3002)
   -> settlement-witness (:3001)
+```
+
+Current evidence lifecycle:
+
+```text
+Agent Activation -> SAR Verification -> Continuity Verification -> Chained Evidence -> Explorer Agent Profile -> Badge Verification -> Public Trust Report
 ```
 
 Storage is append-only JSONL:
@@ -42,8 +59,26 @@ compatible with legacy receipts. Receipts without `receipt_context`, `agent_id`,
 Activation stages are monotonic:
 
 ```text
-registered -> activated -> verified -> chained -> continuous
+registered -> activated -> verified -> chained
 ```
+
+`continuous` may appear in existing records as an extended post-chain state, but
+the registry lifecycle for Default Settlement machine trust is:
+`registered -> activated -> verified -> chained`.
+
+Activation types:
+
+```text
+native
+historical_import
+```
+
+`native` is the current activation path. `historical_import` is reserved for
+future support.
+
+Legacy migration note: older agents may have SAR or Continuity history before
+registry activation. Future `historical_import` support will preserve prior
+evidence instead of forcing those agents to restart their evidence history.
 
 Receipt contexts:
 
@@ -52,6 +87,14 @@ activation_demo
 real_task
 continuity_pair
 ```
+
+Important concepts:
+
+- SAR receipt: post-execution settlement verification evidence.
+- Continuity receipt: pre-execution continuity verification evidence.
+- Chain complete event: the event that links SAR and Continuity evidence into a completed chain.
+- Agent Profile: Explorer-facing registry and evidence summary for an agent.
+- Public Trust Report: public verification surface for an agent's machine trust evidence.
 
 TrustScore is completely separate. This service does not compute or mutate
 TrustScore. Explorer links to existing TrustScore pages at:
