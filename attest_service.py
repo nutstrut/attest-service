@@ -318,6 +318,41 @@ def activation_continuity_input(continuity_input: dict[str, Any], agent_id: str)
     subject["subject_id"] = agent_id
     subject["subject_type"] = subject.get("subject_type") or "agent"
     payload["subject"] = subject
+
+    payload["schema_version"] = payload.get("schema_version") or "0.1"
+    if not isinstance(payload.get("receipts"), list):
+        payload["receipts"] = []
+
+    default_action = {"operation": "activate_agent", "agent_id": agent_id}
+    requested_action = payload.get("spec") if isinstance(payload.get("spec"), dict) else default_action
+    executed_action = payload.get("output") if isinstance(payload.get("output"), dict) else requested_action
+    execution_path = payload.get("execution_path")
+    if not isinstance(execution_path, dict):
+        execution_path = {}
+    execution_path["action_id"] = execution_path.get("action_id") or payload.get("task_id") or f"activate-agent:{agent_id}"
+    execution_path["requested_action"] = execution_path.get("requested_action") or requested_action
+    execution_path["admitted_action"] = execution_path.get("admitted_action") or requested_action
+    execution_path["executed_action"] = execution_path.get("executed_action") or executed_action
+    execution_path["mutation_boundary_ts"] = execution_path.get("mutation_boundary_ts") or payload.get("mutation_boundary_ts") or iso_now()
+    execution_path["executor_id"] = execution_path.get("executor_id") or payload.get("executor_id") or "defaultverifier-activation-v1"
+    if "execution_environment" not in execution_path:
+        execution_path["execution_environment"] = payload.get("execution_environment")
+    payload["execution_path"] = execution_path
+
+    if not isinstance(payload.get("mutation_events"), list):
+        payload["mutation_events"] = []
+
+    evaluation_context = payload.get("evaluation_context")
+    if not isinstance(evaluation_context, dict):
+        evaluation_context = {}
+    evaluation_context["evaluated_at"] = evaluation_context.get("evaluated_at") or payload.get("evaluated_at") or execution_path["mutation_boundary_ts"]
+    evaluation_context["policy_ref"] = evaluation_context.get("policy_ref") or payload.get("policy_ref") or "agent-activation-v1"
+    evaluation_context["expected_verifier_id"] = (
+        evaluation_context.get("expected_verifier_id")
+        or payload.get("expected_verifier_id")
+        or "defaultverifier-continuity-v1"
+    )
+    payload["evaluation_context"] = evaluation_context
     return payload
 
 
