@@ -187,6 +187,9 @@ def registry_record(
     now = iso_now()
     return {
         "agent_id": agent_id,
+        # Forward-compatible activation provenance. Allowed values: native,
+        # historical_import.
+        "activation_type": (existing or {}).get("activation_type") or "native",
         "owner_id": owner_id,
         "counterparty": counterparty,
         "display_name": display_name,
