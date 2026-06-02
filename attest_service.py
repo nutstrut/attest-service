@@ -37,11 +37,12 @@ HTTP_TIMEOUT_SECONDS = 15
 DEFAULT_LIMIT = 50
 MAX_LIMIT = 200
 
-ActivationStage = Literal["registered", "activated", "verified", "chained", "continuous"]
+ActivationStage = Literal["registered", "activated", "activation_failed", "verified", "chained", "continuous"]
 ReceiptContext = Literal["activation_demo", "real_task", "continuity_pair"]
 
 STAGE_ORDER = {
     "registered": 0,
+    "activation_failed": 0,
     "activated": 1,
     "verified": 2,
     "chained": 3,
@@ -381,6 +382,68 @@ def activation_sar_claim(
     }
 
 
+def record_failed_activation(
+    *,
+    agent: dict[str, Any],
+    agent_id: str,
+    activation_id: str,
+    receipt_context: ReceiptContext,
+    metadata: dict[str, Any],
+    error: Any,
+    continuity_receipt_id: str | None = None,
+    sar_receipt_id: str | None = None,
+    sar_verdict: Any = None,
+    reason_code: Any = None,
+    elapsed_ms: int | None = None,
+) -> dict[str, Any]:
+    now = iso_now()
+    error_detail = error if isinstance(error, (str, int, float, bool, dict, list)) or error is None else str(error)
+    activation_record = {
+        "activation_id": activation_id,
+        "agent_id": agent_id,
+        "activation_type": agent.get("activation_type") or "native",
+        "stage": "activation_failed",
+        "activation_stage": "activation_failed",
+        "status": "failed",
+        "receipt_context": receipt_context,
+        "continuity_receipt_id": continuity_receipt_id,
+        "sar_receipt_id": sar_receipt_id,
+        "sar_verdict": sar_verdict,
+        "reason_code": reason_code,
+        "error": error_detail,
+        "chain_id": None,
+        "created_at": now,
+        "updated_at": now,
+        "metadata": metadata,
+    }
+    append_jsonl(ACTIVATION_LEDGER, activation_record)
+    failed_agent = registry_record(
+        agent,
+        agent_id=agent_id,
+        owner_id=agent["owner_id"],
+        counterparty=agent["counterparty"],
+        display_name=agent.get("display_name"),
+        stage="activation_failed",
+        metadata=agent.get("metadata", {}),
+        latest_activation_id=activation_id,
+        latest_continuity_receipt_id=continuity_receipt_id,
+        latest_sar_receipt_id=sar_receipt_id,
+    )
+    failed_agent["status"] = "activation_failed"
+    write_agent(failed_agent)
+    write_analytics(
+        agent_id=agent_id,
+        activation_id=activation_id,
+        event_type="activation_failed",
+        receipt_context=receipt_context,
+        from_stage=agent.get("activation_stage"),
+        to_stage="activation_failed",
+        elapsed_ms=elapsed_ms,
+        metadata={"error": error_detail, "sar_verdict": sar_verdict, "reason_code": reason_code},
+    )
+    return activation_record
+
+
 def is_sar_pass(sar: dict[str, Any]) -> bool:
     verdict = sar_verdict_value(sar)
     return str(verdict).upper() == "PASS"
@@ -627,82 +690,104 @@ def activate_agent(agent_id: str, input: ActivateAgentInput):
         metadata=agent.get("metadata", {}),
         latest_activation_id=activation_id,
     )
-    write_agent(activated_agent)
-    write_analytics(
-        agent_id=agent_id,
-        activation_id=activation_id,
-        event_type="stage_changed",
-        receipt_context=input.receipt_context,
-        from_stage=agent.get("activation_stage"),
-        to_stage="activated",
-    )
+    continuity: dict[str, Any] | None = None
+    sar: dict[str, Any] | None = None
+    continuity_receipt_id: str | None = None
+    sar_receipt_id: str | None = None
 
-    continuity_input = activation_continuity_input(input.continuity_input, agent_id)
-    continuity = post_json(CONTINUITY_EVALUATE_URL, continuity_input)
-    continuity_receipt_id = continuity.get("receipt_id")
-    if not continuity_receipt_id:
-        raise HTTPException(status_code=502, detail="continuity receipt_id missing")
+    try:
+        continuity_input = activation_continuity_input(input.continuity_input, agent_id)
+        continuity = post_json(CONTINUITY_EVALUATE_URL, continuity_input)
+        continuity_receipt_id = continuity.get("receipt_id")
+        if not continuity_receipt_id:
+            raise HTTPException(status_code=502, detail="continuity receipt_id missing")
 
-    sar_claim = activation_sar_claim(
-        agent_id=agent_id,
-        activation_id=activation_id,
-        receipt_context=input.receipt_context,
-        continuity_receipt_id=continuity_receipt_id,
-        activation_spec=input.activation_spec,
-        activation_output=input.activation_output,
-    )
-    sar_spec = sar_claim if input.receipt_context == "activation_demo" else input.activation_spec
-    sar_output = dict(sar_claim) if input.receipt_context == "activation_demo" else input.activation_output
-    sar_payload = {
-        "task_id": activation_id,
-        "spec": sar_spec,
-        "output": sar_output,
-        "counterparty": agent["counterparty"],
-        "agent_id": agent_id,
-        "activation_id": activation_id,
-        "receipt_context": input.receipt_context,
-        "continuity_receipt_id": continuity_receipt_id,
-    }
-    sar = post_json(SAR_URL, sar_payload)
-    sar_receipt_id = sar.get("receipt_id")
-    if not sar_receipt_id:
-        raise HTTPException(status_code=502, detail="settlement-witness receipt_id missing")
+        sar_claim = activation_sar_claim(
+            agent_id=agent_id,
+            activation_id=activation_id,
+            receipt_context=input.receipt_context,
+            continuity_receipt_id=continuity_receipt_id,
+            activation_spec=input.activation_spec,
+            activation_output=input.activation_output,
+        )
+        sar_spec = sar_claim if input.receipt_context == "activation_demo" else input.activation_spec
+        sar_output = dict(sar_claim) if input.receipt_context == "activation_demo" else input.activation_output
+        sar_payload = {
+            "task_id": activation_id,
+            "spec": sar_spec,
+            "output": sar_output,
+            "counterparty": agent["counterparty"],
+            "agent_id": agent_id,
+            "activation_id": activation_id,
+            "receipt_context": input.receipt_context,
+            "continuity_receipt_id": continuity_receipt_id,
+        }
+        sar = post_json(SAR_URL, sar_payload)
+        sar_receipt_id = sar.get("receipt_id")
+        if not sar_receipt_id:
+            raise HTTPException(status_code=502, detail="settlement-witness receipt_id missing")
+    except HTTPException as exc:
+        elapsed_ms = int((time.perf_counter() - t0) * 1000)
+        record_failed_activation(
+            agent=agent,
+            agent_id=agent_id,
+            activation_id=activation_id,
+            receipt_context=input.receipt_context,
+            metadata=input.metadata,
+            error=exc.detail,
+            continuity_receipt_id=continuity_receipt_id,
+            sar_receipt_id=sar_receipt_id,
+            elapsed_ms=elapsed_ms,
+        )
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={
+                "activation_id": activation_id,
+                "agent_id": agent_id,
+                "status": "failed",
+                "error": exc.detail,
+            },
+        )
+    except Exception as exc:
+        elapsed_ms = int((time.perf_counter() - t0) * 1000)
+        record_failed_activation(
+            agent=agent,
+            agent_id=agent_id,
+            activation_id=activation_id,
+            receipt_context=input.receipt_context,
+            metadata=input.metadata,
+            error=str(exc),
+            continuity_receipt_id=continuity_receipt_id,
+            sar_receipt_id=sar_receipt_id,
+            elapsed_ms=elapsed_ms,
+        )
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "activation_id": activation_id,
+                "agent_id": agent_id,
+                "status": "failed",
+                "error": str(exc),
+            },
+        )
 
     sar_verdict = sar_verdict_value(sar)
     sar_reason = sar_reason_code(sar)
     if not is_sar_pass(sar):
-        now = iso_now()
-        failed_agent = registry_record(
-            activated_agent,
+        elapsed_ms = int((time.perf_counter() - t0) * 1000)
+        record_failed_activation(
+            agent=agent,
             agent_id=agent_id,
-            owner_id=agent["owner_id"],
-            counterparty=agent["counterparty"],
-            display_name=agent.get("display_name"),
-            stage="activated",
-            metadata=agent.get("metadata", {}),
-            latest_activation_id=activation_id,
-            latest_continuity_receipt_id=continuity_receipt_id,
-            latest_sar_receipt_id=sar_receipt_id,
+            activation_id=activation_id,
+            receipt_context=input.receipt_context,
+            metadata=input.metadata,
+            error=sar_reason or "SAR verdict did not pass",
+            continuity_receipt_id=continuity_receipt_id,
+            sar_receipt_id=sar_receipt_id,
+            sar_verdict=sar_verdict,
+            reason_code=sar_reason,
+            elapsed_ms=elapsed_ms,
         )
-        failed_agent["status"] = "activation_failed"
-        write_agent(failed_agent)
-        activation_record = {
-            "activation_id": activation_id,
-            "agent_id": agent_id,
-            "stage": "activated",
-            "activation_stage": "activated",
-            "status": "failed",
-            "receipt_context": input.receipt_context,
-            "continuity_receipt_id": continuity_receipt_id,
-            "sar_receipt_id": sar_receipt_id,
-            "sar_verdict": sar_verdict,
-            "reason_code": sar_reason,
-            "chain_id": None,
-            "created_at": now,
-            "updated_at": now,
-            "metadata": input.metadata,
-        }
-        append_jsonl(ACTIVATION_LEDGER, activation_record)
         write_receipt(
             receipt=continuity,
             receipt_type="continuity",
@@ -717,21 +802,10 @@ def activate_agent(agent_id: str, input: ActivateAgentInput):
             agent_id=agent_id,
             activation_id=activation_id,
         )
-        elapsed_ms = int((time.perf_counter() - t0) * 1000)
-        write_analytics(
-            agent_id=agent_id,
-            activation_id=activation_id,
-            event_type="activation_failed",
-            receipt_context=input.receipt_context,
-            from_stage="activated",
-            to_stage="activated",
-            elapsed_ms=elapsed_ms,
-            metadata={"sar_verdict": sar_verdict, "reason_code": sar_reason},
-        )
         return {
             "activation_id": activation_id,
             "agent_id": agent_id,
-            "stage": "activated",
+            "stage": "activation_failed",
             "receipt_context": input.receipt_context,
             "status": "failed",
             "elapsed_ms": elapsed_ms,
@@ -742,11 +816,11 @@ def activate_agent(agent_id: str, input: ActivateAgentInput):
             "chain": None,
             "registry": {
                 "agent_id": agent_id,
-                "stage": "activated",
-                "activation_stage": "activated",
+                "stage": "activation_failed",
+                "activation_stage": "activation_failed",
                 "status": "activation_failed",
                 "latest_activation_id": activation_id,
-                "latest_chain_id": failed_agent.get("latest_chain_id"),
+                "latest_chain_id": agent.get("latest_chain_id"),
                 "latest_sar_receipt_id": sar_receipt_id,
             },
         }
@@ -763,7 +837,6 @@ def activate_agent(agent_id: str, input: ActivateAgentInput):
         latest_continuity_receipt_id=continuity_receipt_id,
         latest_sar_receipt_id=sar_receipt_id,
     )
-    write_agent(verified_agent)
     write_analytics(
         agent_id=agent_id,
         activation_id=activation_id,
@@ -799,7 +872,6 @@ def activate_agent(agent_id: str, input: ActivateAgentInput):
         latest_continuity_receipt_id=continuity_receipt_id,
         latest_sar_receipt_id=sar_receipt_id,
     )
-    write_agent(chained_agent)
 
     now = iso_now()
     activation_record = {
@@ -834,6 +906,7 @@ def activate_agent(agent_id: str, input: ActivateAgentInput):
         activation_id=activation_id,
         chain_id=chain_id,
     )
+    write_agent(chained_agent)
     elapsed_ms = int((time.perf_counter() - t0) * 1000)
     write_analytics(
         agent_id=agent_id,
