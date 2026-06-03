@@ -517,6 +517,15 @@ class RegisterAgentInput(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class HistoricalImportAgentInput(BaseModel):
+    agent_id: str
+    display_name: str | None = None
+    activation_type: str
+    origin_anchor: dict[str, Any]
+    lineage: dict[str, Any]
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
 class ActivateAgentInput(BaseModel):
     receipt_context: Literal["activation_demo", "real_task"] = "activation_demo"
     continuity_input: dict[str, Any]
@@ -697,6 +706,84 @@ def list_agents(limit: int | None = Query(DEFAULT_LIMIT)):
         records_by_agent[record["agent_id"]] = record
     agents = sorted_agents(list(records_by_agent.values()), bounded_limit(limit))
     return {"count": len(agents), "agents": agents}
+
+
+@app.post("/v1/agents/historical-import")
+def historical_import_agent(input: HistoricalImportAgentInput):
+    if input.activation_type != "historical_import":
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "invalid_activation_type", "reason": "activation_type must be historical_import"},
+        )
+
+    if latest_agent(input.agent_id):
+        raise HTTPException(status_code=409, detail={"error": "already_registered", "reason": "already_registered"})
+
+    chain_id = input.origin_anchor.get("chain_id")
+    if not chain_id:
+        raise HTTPException(status_code=400, detail={"error": "missing_origin_anchor_chain_id", "reason": "origin_anchor.chain_id is required"})
+
+    now = iso_now()
+    activation_id = "historical_import:" + uuid4().hex
+    trustscore_url = f"/trustscore/{input.agent_id}"
+    explorer_url = f"/v1/attest/chain/{chain_id}"
+
+    registry = {
+        "agent_id": input.agent_id,
+        "display_name": input.display_name,
+        "registered_at": now,
+        "created_at": now,
+        "updated_at": now,
+        "last_seen_at": now,
+        "activation_stage": "chained",
+        "stage": "chained",
+        "status": "chained",
+        "activation_type": "historical_import",
+        "activation_receipt_id": chain_id,
+        "latest_activation_id": activation_id,
+        "origin_anchor": input.origin_anchor,
+        "lineage": input.lineage,
+        "receipt_ids": [],
+        "real_receipt_ids": [],
+        "chain_ids": [chain_id],
+        "latest_chain_id": chain_id,
+        "explorer_url": explorer_url,
+        "trustscore_url": trustscore_url,
+        "metadata": input.metadata,
+    }
+    write_agent(registry)
+
+    activation_record = {
+        "activation_id": activation_id,
+        "agent_id": input.agent_id,
+        "activation_type": "historical_import",
+        "stage": "chained",
+        "activation_stage": "chained",
+        "status": "chained",
+        "origin_anchor": input.origin_anchor,
+        "lineage": input.lineage,
+        "chain_id": chain_id,
+        "created_at": now,
+        "updated_at": now,
+        "metadata": input.metadata,
+    }
+    append_jsonl(ACTIVATION_LEDGER, activation_record)
+
+    legacy_subjects = input.lineage.get("legacy_subjects") or []
+    write_analytics(
+        agent_id=input.agent_id,
+        activation_id=activation_id,
+        event_type="historical_import",
+        from_stage="legacy_detected" if legacy_subjects else None,
+        to_stage="chained",
+        metadata={
+            "origin_anchor": input.origin_anchor,
+            "lineage": input.lineage,
+            "chain_id": chain_id,
+        },
+    )
+
+    return {"activation_id": activation_id, "agent_id": input.agent_id, "stage": "chained", "status": "chained", "registry": registry}
 
 
 @app.get("/v1/agents/{agent_id}")
