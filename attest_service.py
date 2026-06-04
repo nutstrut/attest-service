@@ -1240,6 +1240,24 @@ def get_agent_summary(agent_id: str, limit: int | None = Query(DEFAULT_LIMIT)):
             all_activations_by_id[record["activation_id"]] = record
     all_chains = [record for record in read_jsonl(CHAIN_LEDGER) if record.get("agent_id") == agent_id]
     all_receipts = [record for record in read_jsonl(RECEIPT_LEDGER) if record.get("agent_id") == agent_id]
+    evidence_receipt_ids = {record.get("receipt_id") for record in all_receipts if record.get("receipt_id")}
+    for chain in all_chains:
+        for receipt_field in ("continuity_receipt_id", "sar_receipt_id"):
+            receipt_id = chain.get(receipt_field)
+            if receipt_id:
+                evidence_receipt_ids.add(receipt_id)
+    latest_chain = max(
+        (chain for chain in all_chains if chain.get("created_at")),
+        key=lambda chain: chain["created_at"],
+        default=None,
+    )
+    latest_receipt_ids = None
+    if latest_chain:
+        latest_receipt_ids = {
+            receipt_field: latest_chain[receipt_field]
+            for receipt_field in ("continuity_receipt_id", "sar_receipt_id")
+            if latest_chain.get(receipt_field)
+        }
     latest_dates = [
         value
         for value in [agent.get("updated_at")]
@@ -1256,10 +1274,12 @@ def get_agent_summary(agent_id: str, limit: int | None = Query(DEFAULT_LIMIT)):
         "chains": chains,
         "receipts": receipts,
         "evidence_summary": {
-            "receipt_count": len(all_receipts),
+            "receipt_count": len(evidence_receipt_ids),
             "chain_count": len(all_chains),
             "activation_count": len(all_activations_by_id),
             "latest_activity_at": max(latest_dates) if latest_dates else None,
+            "latest_chain_id": latest_chain.get("chain_id") if latest_chain else None,
+            "latest_receipt_ids": latest_receipt_ids,
         },
         "trustscore_url": trustscore_url,
         "badge_url": badge_url,
