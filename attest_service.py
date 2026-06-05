@@ -36,6 +36,7 @@ SAR_URL = "http://127.0.0.1:3001/settlement-witness"
 HTTP_TIMEOUT_SECONDS = 15
 DEFAULT_LIMIT = 50
 MAX_LIMIT = 200
+DEFAULT_EXTERNAL_VERIFIER = "Default Settlement"
 
 ActivationStage = Literal["registered", "activated", "activation_failed", "verified", "chained", "continuous"]
 ReceiptContext = Literal["activation_demo", "real_task", "continuity_pair"]
@@ -131,6 +132,10 @@ def latest_activation(activation_id: str) -> dict[str, Any] | None:
 
 def latest_receipt(receipt_id: str) -> dict[str, Any] | None:
     return latest_by(read_jsonl(RECEIPT_LEDGER), "receipt_id", receipt_id)
+
+
+def latest_chain_record(chain_id: str) -> dict[str, Any] | None:
+    return latest_by(read_jsonl(CHAIN_LEDGER), "chain_id", chain_id)
 
 
 def sorted_recent(records: list[dict[str, Any]], field: str, limit: int) -> list[dict[str, Any]]:
@@ -250,23 +255,24 @@ def write_receipt(
     agent_id: str | None = None,
     activation_id: str | None = None,
     chain_id: str | None = None,
+    external_provenance: dict[str, Any] | None = None,
 ) -> None:
     receipt_id = receipt.get("receipt_id")
     if not receipt_id:
         return
-    append_jsonl(
-        RECEIPT_LEDGER,
-        {
-            "receipt_id": receipt_id,
-            "receipt_type": receipt_type,
-            "receipt_context": receipt_context,
-            "agent_id": agent_id,
-            "activation_id": activation_id,
-            "chain_id": chain_id,
-            "created_at": iso_now(),
-            "receipt": receipt,
-        },
-    )
+    record = {
+        "receipt_id": receipt_id,
+        "receipt_type": receipt_type,
+        "receipt_context": receipt_context,
+        "agent_id": agent_id,
+        "activation_id": activation_id,
+        "chain_id": chain_id,
+        "created_at": iso_now(),
+        "receipt": receipt,
+    }
+    if external_provenance:
+        record["external_provenance"] = external_provenance
+    append_jsonl(RECEIPT_LEDGER, record)
 
 
 def write_chain(
@@ -283,6 +289,7 @@ def write_chain(
     sar_verdict: str | None = None,
     verdict_correlation: str | None = None,
     predicate_status_vector: dict[str, Any] | list[Any] | None = None,
+    external_provenance: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     record = {
         "chain_id": chain_id,
@@ -299,8 +306,40 @@ def write_chain(
         "receipt_context": receipt_context,
         "created_at": iso_now(),
     }
+    if external_provenance:
+        record["external_provenance"] = external_provenance
     append_jsonl(CHAIN_LEDGER, record)
     return record
+
+
+def local_chain_context(chain_id: str) -> dict[str, Any] | None:
+    chain = latest_chain_record(chain_id)
+    if chain:
+        return chain
+    for record in reversed(read_jsonl(ACTIVATION_LEDGER)):
+        if record.get("chain_id") == chain_id:
+            return record
+    for record in reversed(read_jsonl(AGENT_LEDGER)):
+        if record.get("latest_chain_id") == chain_id:
+            return record
+    return None
+
+
+def chain_response(chain_id: str) -> dict[str, Any]:
+    local_record = local_chain_context(chain_id)
+    try:
+        response = get_json(f"{CONTINUITY_CHAIN_URL}/{chain_id}")
+    except Exception:
+        if not local_record:
+            raise
+        response = {"chain_id": chain_id, "chain_status": "lookup_unavailable"}
+
+    if local_record:
+        response = dict(response)
+        response["attest_chain_record"] = local_record
+        if local_record.get("external_provenance"):
+            response["external_provenance"] = local_record["external_provenance"]
+    return response
 
 
 def chain_lookup(chain_id: str) -> dict[str, Any]:
@@ -362,6 +401,95 @@ def first_present(record: dict[str, Any], keys: list[str]) -> Any:
         if value is not None:
             return value
     return None
+
+
+def dict_or_empty(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def external_receipt_id(value: Any) -> Any:
+    if isinstance(value, dict):
+        return first_present(value, ["receipt_id", "external_receipt_id", "id"])
+    if isinstance(value, str):
+        return value
+    return None
+
+
+def external_provenance_from_payload(
+    *,
+    sar_input: dict[str, Any] | None = None,
+    continuity_input: dict[str, Any] | None = None,
+    origin_anchor: dict[str, Any] | None = None,
+    lineage: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    sar_input = dict_or_empty(sar_input)
+    sar_spec = dict_or_empty(sar_input.get("spec"))
+    continuity_input = dict_or_empty(continuity_input)
+    execution_path = dict_or_empty(continuity_input.get("execution_path"))
+    origin_anchor = dict_or_empty(origin_anchor)
+    lineage = dict_or_empty(lineage)
+
+    external_receipt = first_present(sar_spec, ["external_receipt"]) or first_present(sar_input, ["external_receipt"])
+    external_issuer = (
+        first_present(sar_spec, ["external_issuer"])
+        or first_present(sar_input, ["external_issuer"])
+        or first_present(origin_anchor, ["external_issuer"])
+        or first_present(lineage, ["external_issuer"])
+    )
+    observed_by = (
+        first_present(sar_spec, ["observed_by"])
+        or first_present(sar_input, ["observed_by"])
+        or first_present(origin_anchor, ["observed_by"])
+        or first_present(lineage, ["observed_by"])
+    )
+    verified_by = (
+        first_present(sar_spec, ["verified_by"])
+        or first_present(sar_input, ["verified_by"])
+        or first_present(origin_anchor, ["verified_by"])
+        or first_present(lineage, ["verified_by"])
+    )
+    provenance = (
+        first_present(sar_spec, ["provenance"])
+        or first_present(sar_input, ["provenance"])
+        or first_present(origin_anchor, ["provenance"])
+        or first_present(lineage, ["provenance"])
+    )
+    counterparty = (
+        first_present(sar_input, ["counterparty"])
+        or first_present(sar_spec, ["counterparty"])
+        or first_present(origin_anchor, ["counterparty"])
+        or first_present(lineage, ["counterparty"])
+    )
+    receipt_id = (
+        external_receipt_id(external_receipt)
+        or first_present(sar_spec, ["external_receipt_id"])
+        or first_present(sar_input, ["external_receipt_id"])
+        or first_present(origin_anchor, ["external_receipt_id", "receipt_id"])
+        or first_present(lineage, ["external_receipt_id", "receipt_id"])
+    )
+
+    action_fields = {
+        key: execution_path[key]
+        for key in ("requested_action", "admitted_action", "executed_action")
+        if key in execution_path and execution_path[key] is not None
+    }
+    if not any([external_receipt, external_issuer, observed_by, verified_by, provenance, receipt_id]):
+        return None
+
+    normalized = {
+        "source_type": "external_sar_receipt",
+        "external_issuer": external_issuer,
+        "external_receipt_id": receipt_id,
+        "observed_by": observed_by,
+        "verified_by": verified_by or DEFAULT_EXTERNAL_VERIFIER,
+        "provenance": provenance,
+        "counterparty": counterparty,
+    }
+    if isinstance(external_receipt, dict):
+        normalized["external_receipt"] = external_receipt
+    if action_fields:
+        normalized["execution_path"] = action_fields
+    return {key: value for key, value in normalized.items() if value is not None}
 
 
 def verdict_correlation(continuity_value: Any, sar_value: Any) -> str:
@@ -557,6 +685,7 @@ def attest(input: SyncAttestInput):
     sar_payload = dict(input.sar_input)
     sar_payload["continuity_receipt_id"] = continuity_receipt_id
     sar_payload["receipt_context"] = input.receipt_context
+    external_provenance = external_provenance_from_payload(sar_input=sar_payload, continuity_input=input.continuity_input)
     sar = post_json(SAR_URL, sar_payload)
     sar_receipt_id = sar.get("receipt_id")
     if not sar_receipt_id:
@@ -572,9 +701,18 @@ def attest(input: SyncAttestInput):
         sar_receipt_id=sar_receipt_id,
         stage="chained",
         receipt_context=input.receipt_context,
+        external_provenance=external_provenance,
     )
+    if external_provenance:
+        chain = {**chain, "external_provenance": external_provenance}
     write_receipt(receipt=continuity, receipt_type="continuity", receipt_context=input.receipt_context, chain_id=chain_id)
-    write_receipt(receipt=sar, receipt_type="sar", receipt_context=input.receipt_context, chain_id=chain_id)
+    write_receipt(
+        receipt=sar,
+        receipt_type="sar",
+        receipt_context=input.receipt_context,
+        chain_id=chain_id,
+        external_provenance=external_provenance,
+    )
 
     return {
         "service": SERVICE,
@@ -593,23 +731,24 @@ def attest(input: SyncAttestInput):
 def begin(input: BeginInput):
     continuity = post_json(CONTINUITY_EVALUATE_URL, input.continuity_input)
     continuity_receipt_id = continuity.get("receipt_id")
+    external_provenance = external_provenance_from_payload(continuity_input=input.continuity_input)
 
     if not continuity_receipt_id:
         raise HTTPException(status_code=502, detail="continuity receipt_id missing")
 
     session_id = "attest_session:" + uuid4().hex
 
-    append_jsonl(
-        SESSION_LEDGER,
-        {
-            "session_id": session_id,
-            "status": "pending",
-            "receipt_context": input.receipt_context,
-            "continuity_receipt_id": continuity_receipt_id,
-            "metadata": input.metadata,
-            "created_at": iso_now(),
-        },
-    )
+    session_record = {
+        "session_id": session_id,
+        "status": "pending",
+        "receipt_context": input.receipt_context,
+        "continuity_receipt_id": continuity_receipt_id,
+        "metadata": input.metadata,
+        "created_at": iso_now(),
+    }
+    if external_provenance:
+        session_record["external_provenance"] = external_provenance
+    append_jsonl(SESSION_LEDGER, session_record)
     write_receipt(receipt=continuity, receipt_type="continuity", receipt_context=input.receipt_context)
 
     return {"session_id": session_id, "status": "pending", "receipt_context": input.receipt_context, "continuity": continuity}
@@ -630,6 +769,7 @@ def complete(input: CompleteInput):
     sar_payload = dict(input.sar_input)
     sar_payload["continuity_receipt_id"] = continuity_receipt_id
     sar_payload["receipt_context"] = receipt_context
+    external_provenance = external_provenance_from_payload(sar_input=sar_payload) or session.get("external_provenance")
 
     sar = post_json(SAR_URL, sar_payload)
     sar_receipt_id = sar.get("receipt_id")
@@ -637,18 +777,18 @@ def complete(input: CompleteInput):
         raise HTTPException(status_code=502, detail="settlement-witness receipt_id missing")
     chain_id = sha256_text(continuity_receipt_id + sar_receipt_id)
 
-    append_jsonl(
-        SESSION_LEDGER,
-        {
-            "session_id": input.session_id,
-            "status": "complete",
-            "receipt_context": receipt_context,
-            "continuity_receipt_id": continuity_receipt_id,
-            "sar_receipt_id": sar_receipt_id,
-            "chain_id": chain_id,
-            "completed_at": iso_now(),
-        },
-    )
+    completed_session_record = {
+        "session_id": input.session_id,
+        "status": "complete",
+        "receipt_context": receipt_context,
+        "continuity_receipt_id": continuity_receipt_id,
+        "sar_receipt_id": sar_receipt_id,
+        "chain_id": chain_id,
+        "completed_at": iso_now(),
+    }
+    if external_provenance:
+        completed_session_record["external_provenance"] = external_provenance
+    append_jsonl(SESSION_LEDGER, completed_session_record)
     write_chain(
         chain_id=chain_id,
         agent_id=sar_payload.get("agent_id"),
@@ -657,8 +797,15 @@ def complete(input: CompleteInput):
         sar_receipt_id=sar_receipt_id,
         stage="chained",
         receipt_context=receipt_context,
+        external_provenance=external_provenance,
     )
-    write_receipt(receipt=sar, receipt_type="sar", receipt_context=receipt_context, chain_id=chain_id)
+    write_receipt(
+        receipt=sar,
+        receipt_type="sar",
+        receipt_context=receipt_context,
+        chain_id=chain_id,
+        external_provenance=external_provenance,
+    )
 
     return {"session_id": input.session_id, "status": "complete", "receipt_context": receipt_context, "sar": sar, "chain_id": chain_id}
 
@@ -675,7 +822,7 @@ def get_session(session_id: str):
 
 @app.get("/v1/attest/chain/{chain_id}")
 def get_chain(chain_id: str):
-    return get_json(f"{CONTINUITY_CHAIN_URL}/{chain_id}")
+    return chain_response(chain_id)
 
 
 @app.post("/v1/agents/register")
@@ -727,6 +874,7 @@ def historical_import_agent(input: HistoricalImportAgentInput):
     activation_id = "historical_import:" + uuid4().hex
     trustscore_url = f"/trustscore/{input.agent_id}"
     explorer_url = f"/v1/attest/chain/{chain_id}"
+    external_provenance = external_provenance_from_payload(origin_anchor=input.origin_anchor, lineage=input.lineage)
 
     registry = {
         "agent_id": input.agent_id,
@@ -767,6 +915,9 @@ def historical_import_agent(input: HistoricalImportAgentInput):
         "updated_at": now,
         "metadata": input.metadata,
     }
+    if external_provenance:
+        registry["external_provenance"] = external_provenance
+        activation_record["external_provenance"] = external_provenance
     append_jsonl(ACTIVATION_LEDGER, activation_record)
 
     legacy_subjects = input.lineage.get("legacy_subjects") or []
@@ -844,6 +995,7 @@ def activate_agent(agent_id: str, input: ActivateAgentInput):
             "receipt_context": input.receipt_context,
             "continuity_receipt_id": continuity_receipt_id,
         }
+        external_provenance = external_provenance_from_payload(sar_input=sar_payload, continuity_input=continuity_input)
         sar = post_json(SAR_URL, sar_payload)
         sar_receipt_id = sar.get("receipt_id")
         if not sar_receipt_id:
@@ -923,6 +1075,7 @@ def activate_agent(agent_id: str, input: ActivateAgentInput):
             receipt_context=input.receipt_context,
             agent_id=agent_id,
             activation_id=activation_id,
+            external_provenance=external_provenance,
         )
         return {
             "activation_id": activation_id,
@@ -980,7 +1133,10 @@ def activate_agent(agent_id: str, input: ActivateAgentInput):
         sar_verdict=sar_verdict,
         stage="chained",
         receipt_context=input.receipt_context,
+        external_provenance=external_provenance,
     )
+    if external_provenance:
+        chain = {**chain, "external_provenance": external_provenance}
     chained_agent = registry_record(
         verified_agent,
         agent_id=agent_id,
@@ -1011,6 +1167,8 @@ def activate_agent(agent_id: str, input: ActivateAgentInput):
         "updated_at": now,
         "metadata": input.metadata,
     }
+    if external_provenance:
+        activation_record["external_provenance"] = external_provenance
     append_jsonl(ACTIVATION_LEDGER, activation_record)
     write_receipt(
         receipt=continuity,
@@ -1027,6 +1185,7 @@ def activate_agent(agent_id: str, input: ActivateAgentInput):
         agent_id=agent_id,
         activation_id=activation_id,
         chain_id=chain_id,
+        external_provenance=external_provenance,
     )
     write_agent(chained_agent)
     elapsed_ms = int((time.perf_counter() - t0) * 1000)
@@ -1090,6 +1249,11 @@ def record_continuity_pair(agent_id: str, input: ContinuityPairInput):
     continuity_classification = first_present(continuity, ["continuity_classification", "classification", "verdict", "status"])
     sar_verdict = first_present(sar_receipt, ["verdict", "status", "result"])
     predicate_status_vector = first_present(continuity, ["predicate_status_vector", "predicate_status", "predicates"])
+    external_provenance = (
+        existing_activation.get("external_provenance")
+        or sar_receipt_record.get("external_provenance")
+        or external_provenance_from_payload(sar_input=sar_receipt, continuity_input=continuity_input)
+    )
     write_chain(
         chain_id=chain_id,
         agent_id=agent_id,
@@ -1103,6 +1267,7 @@ def record_continuity_pair(agent_id: str, input: ContinuityPairInput):
         predicate_status_vector=predicate_status_vector,
         stage="continuous",
         receipt_context="continuity_pair",
+        external_provenance=external_provenance,
     )
 
     continuous_agent = registry_record(
@@ -1135,6 +1300,8 @@ def record_continuity_pair(agent_id: str, input: ContinuityPairInput):
             "updated_at": chain_created_at,
             "metadata": {**existing_activation.get("metadata", {}), **input.metadata},
         }
+        if external_provenance:
+            updated_activation["external_provenance"] = external_provenance
         append_jsonl(ACTIVATION_LEDGER, updated_activation)
 
     write_receipt(
@@ -1258,6 +1425,16 @@ def get_agent_summary(agent_id: str, limit: int | None = Query(DEFAULT_LIMIT)):
             for receipt_field in ("continuity_receipt_id", "sar_receipt_id")
             if latest_chain.get(receipt_field)
         }
+    provenance_records = [
+        record
+        for record in all_chains + list(all_activations_by_id.values()) + all_receipts + [agent]
+        if record.get("external_provenance")
+    ]
+    latest_external_provenance_record = max(
+        provenance_records,
+        key=lambda record: record.get("updated_at") or record.get("created_at") or "",
+        default=None,
+    )
     latest_dates = [
         value
         for value in [agent.get("updated_at")]
@@ -1268,19 +1445,24 @@ def get_agent_summary(agent_id: str, limit: int | None = Query(DEFAULT_LIMIT)):
     ]
     trustscore_url = f"/trustscore/{agent_id}"
     badge_url = f"/badge/{agent_id}.svg"
+    evidence_summary = {
+        "receipt_count": len(evidence_receipt_ids),
+        "chain_count": len(all_chains),
+        "activation_count": len(all_activations_by_id),
+        "latest_activity_at": max(latest_dates) if latest_dates else None,
+        "latest_chain_id": latest_chain.get("chain_id") if latest_chain else None,
+        "latest_receipt_ids": latest_receipt_ids,
+    }
+    if latest_external_provenance_record:
+        evidence_summary["external_provenance_count"] = len(provenance_records)
+        evidence_summary["latest_external_provenance"] = latest_external_provenance_record["external_provenance"]
+
     return {
         "agent": agent,
         "activations": activations,
         "chains": chains,
         "receipts": receipts,
-        "evidence_summary": {
-            "receipt_count": len(evidence_receipt_ids),
-            "chain_count": len(all_chains),
-            "activation_count": len(all_activations_by_id),
-            "latest_activity_at": max(latest_dates) if latest_dates else None,
-            "latest_chain_id": latest_chain.get("chain_id") if latest_chain else None,
-            "latest_receipt_ids": latest_receipt_ids,
-        },
+        "evidence_summary": evidence_summary,
         "trustscore_url": trustscore_url,
         "badge_url": badge_url,
         "badge_markdown": build_badge_markdown(agent_id),
