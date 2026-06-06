@@ -134,6 +134,26 @@ def latest_receipt(receipt_id: str) -> dict[str, Any] | None:
     return latest_by(read_jsonl(RECEIPT_LEDGER), "receipt_id", receipt_id)
 
 
+def contains_receipt_id(value: Any, receipt_id: str) -> bool:
+    if isinstance(value, dict):
+        for key, nested_value in value.items():
+            if key == "receipt_id" and nested_value == receipt_id:
+                return True
+            if contains_receipt_id(nested_value, receipt_id):
+                return True
+    if isinstance(value, list):
+        return any(contains_receipt_id(item, receipt_id) for item in value)
+    return False
+
+
+def find_receipt(receipt_id: str) -> dict[str, Any] | None:
+    latest = None
+    for record in read_jsonl(RECEIPT_LEDGER):
+        if contains_receipt_id(record, receipt_id):
+            latest = record
+    return latest
+
+
 def latest_chain_record(chain_id: str) -> dict[str, Any] | None:
     return latest_by(read_jsonl(CHAIN_LEDGER), "chain_id", chain_id)
 
@@ -823,6 +843,14 @@ def get_session(session_id: str):
 @app.get("/v1/attest/chain/{chain_id}")
 def get_chain(chain_id: str):
     return chain_response(chain_id)
+
+
+@app.get("/v1/attest/receipt/{receipt_id}")
+def get_receipt(receipt_id: str):
+    receipt = find_receipt(receipt_id)
+    if not receipt:
+        raise HTTPException(status_code=404, detail="receipt not found")
+    return receipt
 
 
 @app.post("/v1/agents/register")
