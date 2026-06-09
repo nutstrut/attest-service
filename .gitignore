@@ -7,3 +7,7 @@ v1-agent-register-test-*.json
 tmp-*.json
 evidence.json
 hermes-vps-*.json
+
+# Runtime TrustScore cache
+trustscore_cache.json
+trustscore_cache.lock

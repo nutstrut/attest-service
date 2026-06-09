@@ -103,6 +103,18 @@ TrustScore. Explorer links to existing TrustScore pages at:
 /trustscore/{agent_id}
 ```
 
+Agent summary responses may include a cached `trustscore_v1` value from
+`trustscore_cache.json`. Settlement Witness remains the source of truth:
+summaries refresh TrustScore with a short timeout, and if that refresh fails
+after a previous successful fetch, the cached score is returned with
+`_cache.state` set to `stale`.
+
+To manually warm the local TrustScore cache for a known agent:
+
+```bash
+python3 warm_trustscore_cache.py agent:cli-speedrun-20260608-160425-124d18
+```
+
 The existing badge system is unchanged. Explorer only displays the existing
 badge image at:
 
