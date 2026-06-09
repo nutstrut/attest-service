@@ -226,6 +226,13 @@ Summary response includes:
 
 ```json
 {
+  "trustscore_v1": {
+    "score": 0,
+    "tier": "string",
+    "reliability": {},
+    "volume": {},
+    "next_tier": {}
+  },
   "evidence_summary": {
     "receipt_count": 0,
     "chain_count": 0,

@@ -32,8 +32,10 @@ RECEIPT_LEDGER = BASE_DIR / "attest_receipts_master.jsonl"
 CONTINUITY_EVALUATE_URL = "http://127.0.0.1:3002/continuity/evaluate"
 CONTINUITY_CHAIN_URL = "http://127.0.0.1:3002/continuity/chain"
 SAR_URL = "http://127.0.0.1:3001/settlement-witness"
+TRUSTSCORE_URL_BASE = "http://127.0.0.1:3001/trustscore"
 
 HTTP_TIMEOUT_SECONDS = 15
+TRUSTSCORE_TIMEOUT_SECONDS = 1.0
 DEFAULT_LIMIT = 50
 MAX_LIMIT = 200
 DEFAULT_EXTERNAL_VERIFIER = "Default Settlement"
@@ -52,6 +54,19 @@ STAGE_ORDER = {
 
 app = FastAPI(title=SERVICE, version=VERSION)
 
+
+
+def fetch_trustscore(agent_id: str) -> dict[str, Any] | None:
+    try:
+        r = requests.get(f"{TRUSTSCORE_URL_BASE}/{agent_id}", timeout=TRUSTSCORE_TIMEOUT_SECONDS)
+        if r.status_code == 404:
+            return None
+        r.raise_for_status()
+        data = r.json()
+        ts = data.get("trustscore_v1")
+        return ts if isinstance(ts, dict) else None
+    except requests.RequestException as exc:
+        return {"available": False, "error": "trustscore_unavailable", "detail": str(exc)}
 
 def iso_now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
@@ -1473,6 +1488,7 @@ def get_agent_summary(agent_id: str, limit: int | None = Query(DEFAULT_LIMIT)):
     ]
     trustscore_url = f"/trustscore/{agent_id}"
     badge_url = f"/badge/{agent_id}.svg"
+    trustscore_v1 = fetch_trustscore(agent_id)
     evidence_summary = {
         "receipt_count": len(evidence_receipt_ids),
         "chain_count": len(all_chains),
@@ -1491,6 +1507,7 @@ def get_agent_summary(agent_id: str, limit: int | None = Query(DEFAULT_LIMIT)):
         "chains": chains,
         "receipts": receipts,
         "evidence_summary": evidence_summary,
+        "trustscore_v1": trustscore_v1,
         "trustscore_url": trustscore_url,
         "badge_url": badge_url,
         "badge_markdown": build_badge_markdown(agent_id),
