@@ -278,6 +278,71 @@ def sorted_recent(records: list[dict[str, Any]], field: str, limit: int) -> list
     return sorted(records, key=lambda rec: rec.get(field) or "", reverse=True)[:limit]
 
 
+def _looks_truncated(value: str) -> bool:
+    """True when an agent id is a display-only/elided value, e.g. ``0xf23C8C0695...``."""
+    return value.endswith("...") or value.endswith("\u2026") or "\u2026" in value
+
+
+def shorten_agent_id(value: str) -> str:
+    """Return a UI-safe, shortened rendering of an agent id for table display."""
+    if _looks_truncated(value) or len(value) <= 24:
+        return value
+    return f"{value[:12]}...{value[-6:]}"
+
+
+def _matching_full_agent_id(value: Any, prefix: str) -> str | None:
+    """Find a non-truncated agent id string that extends ``prefix`` within a record.
+
+    Used to recover a canonical id that already exists elsewhere in the receipt
+    record when the top-level ``agent_id`` is only a truncated display value. It
+    never fabricates an id: a candidate must literally be present and start with
+    the known prefix.
+    """
+    if isinstance(value, str):
+        if value.startswith(prefix) and len(value) > len(prefix) and not _looks_truncated(value):
+            return value
+        return None
+    if isinstance(value, dict):
+        for nested in value.values():
+            found = _matching_full_agent_id(nested, prefix)
+            if found:
+                return found
+    elif isinstance(value, list):
+        for item in value:
+            found = _matching_full_agent_id(item, prefix)
+            if found:
+                return found
+    return None
+
+
+def receipt_identity_fields(record: dict[str, Any], known_agent_ids: set[str]) -> dict[str, Any]:
+    """Derive canonical/display identity for an Explorer recent-receipts row.
+
+    Returns the additive fields ``{full_agent_id, display_agent_id, has_profile}``
+    layered on top of the existing ``agent_id``. A full (canonical) id is only
+    surfaced when it is actually known: either ``agent_id`` is already canonical,
+    or the canonical form is literally present elsewhere in the record. It is
+    never reconstructed from a truncated display value.
+    """
+    agent_id = record.get("agent_id")
+    if not isinstance(agent_id, str) or not agent_id:
+        return {}
+
+    fields: dict[str, Any] = {}
+    if _looks_truncated(agent_id):
+        fields["display_agent_id"] = agent_id
+        prefix = agent_id[:-3] if agent_id.endswith("...") else agent_id.rstrip("\u2026")
+        full = _matching_full_agent_id(record, prefix) if prefix else None
+        if full:
+            fields["full_agent_id"] = full
+            fields["has_profile"] = full in known_agent_ids
+    else:
+        fields["full_agent_id"] = agent_id
+        fields["display_agent_id"] = shorten_agent_id(agent_id)
+        fields["has_profile"] = agent_id in known_agent_ids
+    return fields
+
+
 def sorted_agents(records: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
     return sorted(
         records,
@@ -1532,6 +1597,12 @@ def list_receipts(agent_id: str | None = None, limit: int | None = Query(DEFAULT
     if agent_id:
         receipts = [receipt for receipt in receipts if receipt.get("agent_id") == agent_id]
     receipts = sorted_recent(receipts, "created_at", bounded_limit(limit))
+    known_agent_ids = {
+        record.get("agent_id") for record in read_jsonl(AGENT_LEDGER) if record.get("agent_id")
+    }
+    receipts = [
+        {**receipt, **receipt_identity_fields(receipt, known_agent_ids)} for receipt in receipts
+    ]
     return {"count": len(receipts), "receipts": receipts}
 
 
