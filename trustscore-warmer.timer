@@ -1,0 +1,12 @@
+[Unit]
+Description=Periodically warm TrustScore cache for agent:morpheus
+
+[Timer]
+# Cache TTL is 300s; warm every 3 min so the public summary endpoint
+# always serves a fresh cached score without a request-path live fetch.
+OnBootSec=2min
+OnUnitActiveSec=3min
+AccuracySec=15s
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,12 @@
+[Unit]
+Description=Warm TrustScore cache for agent:morpheus
+After=network.target attest-service.service
+Wants=attest-service.service
+
+[Service]
+Type=oneshot
+User=ubuntu
+WorkingDirectory=/home/ubuntu/attest-service
+# Settlement-witness TrustScore can take ~60-70s; give it headroom.
+ExecStart=/usr/bin/python3 /home/ubuntu/attest-service/warm_trustscore_cache.py agent:morpheus --timeout 120
+Nice=10
