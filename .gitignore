@@ -11,3 +11,6 @@ hermes-vps-*.json
 # Runtime TrustScore cache
 trustscore_cache.json
 trustscore_cache.lock
+
+# SAR-402 controlled demo generated runs (evidence + receipts)
+reports/sar402-demo/runs/

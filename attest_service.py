@@ -60,6 +60,13 @@ STAGE_ORDER = {
 
 app = FastAPI(title=SERVICE, version=VERSION)
 
+# Controlled SAR-402 demo loop: /pay/url-summary. The route feeds delivery +
+# (demo) payment evidence into the committed Morpheus SAR-402 ingestion layer;
+# it never hand-writes receipts.
+from pay_url_summary import router as pay_url_summary_router  # noqa: E402
+
+app.include_router(pay_url_summary_router)
+
 
 @contextmanager
 def trustscore_cache_file_lock():
