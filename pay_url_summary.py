@@ -1,7 +1,7 @@
-"""Controlled `/pay/url-summary` demo endpoint — first live SAR-402 demo loop.
+"""Controlled `/pay/url-summary` SAR-402 demo loop — demo + live x402 evidence.
 
-This module wires a controlled, x402-style paid URL-summary action to the
-*committed, authoritative* SAR-402 builder/validator/ingestion layer living in
+This module wires an x402-style paid URL-summary action to the *committed,
+authoritative* SAR-402 builder/validator/ingestion layer living in
 `/home/ubuntu/morpheus`. It does NOT hand-write receipts and it does NOT define a
 new schema. It:
 
@@ -11,14 +11,20 @@ new schema. It:
        (requested_url, resolved_url, status_code, title, word_count,
        content_sha256, a short deterministic excerpt, delivered_at, and a
        delivery_evidence_digest binding all of it),
-    3. normalizes payment + delivery evidence into the committed demo ingestion
+    3. builds the payment leg in one of two explicit modes:
+         * `x402_demo` — the existing controlled demo/test evidence, or
+         * `x402_live` — real, facilitator-verified x402 payment evidence
+           (see `x402_live.py`),
+    4. normalizes payment + delivery evidence into the committed demo ingestion
        shape (`morpheus.sar402_agent.normalize_demo`),
-    4. calls the committed Morpheus SAR-402 ingestion/runner
+    5. calls the committed Morpheus SAR-402 ingestion/runner
        (`run_evidence_doc`), which builds via the committed builder and
        re-validates via the committed validator,
-    5. preserves source evidence, normalized view, receipt, and a run report
+    6. preserves source evidence, normalized view, receipt, and a run report
        locally under `reports/sar402-demo/runs/`,
-    6. returns enough to inspect/link the generated receipt.
+    7. returns enough to inspect/link the generated receipt — with the payment
+       mode visible in the request, evidence doc, SAR-402 payment block, the
+       preserved report metadata, and the HTTP response.
 
 Authority boundary (non-negotiable): the verifier never holds execution
 authority. This endpoint performs the (controlled) delivery and *records* the
@@ -26,12 +32,12 @@ result through SAR-402; SAR-402 does not gate, release, or move anything. In
 gate mode an external, non-forbidden `gate_controller` is named — never the
 verifier / Default Settlement / Morpheus / SettlementWitness / SAR-402 itself.
 
-Payment evidence honesty: no real wallet/facilitator is wired in this pass, so
-the payment leg runs in an explicit, clearly-labelled `x402_demo` mode. The
-payment block carries demo-marked payer/tx values and the run report records
-`payment_evidence: "x402_demo"`. Demo evidence is never labelled as a real
-on-chain settlement. See `reports/sar402-demo/url-summary-demo-report-v0.1.md`
-for the exact blocker to a real x402 payment and the next bounded pass.
+Payment evidence honesty: `x402_demo` is explicitly demo-marked and is never
+labelled as a real on-chain settlement. `x402_live` only ever produces a
+`verified` receipt *after* a real x402 facilitator verification (and, in record
+mode, settlement) succeeds — otherwise it fails cleanly and produces no receipt.
+Live mode never silently falls back to demo evidence. See
+`reports/sar402-demo/real-x402-payment-evidence-report-v0.1.md`.
 """
 
 from __future__ import annotations
@@ -60,6 +66,18 @@ if str(MORPHEUS_ROOT) not in sys.path:
 # The committed ingestion layer is authoritative. We feed evidence into it; we
 # never bypass it by hand-writing or hand-validating receipts.
 from morpheus.sar402_agent import EvidenceError, run_evidence_doc  # noqa: E402
+
+# Live x402 boundary (config validation + facilitator verify/settle adapter).
+from x402_live import (  # noqa: E402
+    MODE_DEMO,
+    MODE_LIVE,
+    FacilitatorClient,
+    X402ConfigError,
+    X402VerificationError,
+    build_live_x402_block,
+    load_x402_config,
+    verify_and_settle,
+)
 
 BASE_DIR = Path(__file__).resolve().parent
 DEMO_RUNS_DIR = BASE_DIR / "reports" / "sar402-demo" / "runs"
@@ -114,6 +132,17 @@ class UrlSummaryInput(BaseModel):
     release_policy: Optional[str] = Field(
         default=None,
         description="Gate mode only: explicit release policy string.",
+    )
+    payment_mode: Optional[str] = Field(
+        default=None,
+        description="Payment evidence mode: 'x402_demo' (controlled demo/test "
+        "evidence) or 'x402_live' (real facilitator-verified x402). Defaults to "
+        "the X402_MODE env var, else x402_demo.",
+    )
+    x402_payment: Optional[dict] = Field(
+        default=None,
+        description="Live mode only: the x402 payment payload (the decoded "
+        "X-PAYMENT object) to verify/settle through the configured facilitator.",
     )
     save: bool = Field(default=True, description="Preserve artifacts locally.")
 
@@ -217,20 +246,16 @@ def build_delivery_object(inp: UrlSummaryInput, *, now: datetime) -> dict:
 # Evidence-doc construction (committed `demo` ingestion shape)
 # ---------------------------------------------------------------------------
 
-def build_demo_evidence_doc(inp: UrlSummaryInput, delivered: dict, *, now: datetime) -> dict:
-    """Build the controlled demo-evidence doc in the committed `normalize_demo`
-    shape. The payment leg is explicit `x402_demo` evidence (not a real payment).
+def build_demo_x402_block(inp: UrlSummaryInput, delivered: dict, *, now: datetime) -> dict:
+    """Build the explicit `x402_demo` payment block (NOT a real settlement).
 
-    The paid-for resource identity is the requested_url; in record mode the
-    delivered resource url is the same identity, so object/executor continuity
-    can resolve cleanly to PASS from real delivery evidence."""
+    Carries demo-marked payer/tx/facilitator values so the demo nature is
+    visible inside the generated receipt's payment block."""
     iso = lambda dt: dt.isoformat().replace("+00:00", "Z")
     quoted_at = iso(now - timedelta(seconds=5))
     expires_at = iso(now + timedelta(seconds=QUOTE_WINDOW_SECONDS))
     paid_at = iso(now - timedelta(seconds=2))
     verified_at = iso(now - timedelta(seconds=1))
-    issued_at = iso(now)
-
     resource_url = delivered["requested_url"]
 
     x402: dict[str, Any] = {
@@ -272,15 +297,33 @@ def build_demo_evidence_doc(inp: UrlSummaryInput, delivered: dict, *, now: datet
             "http_status": delivered["status_code"],
             "served_at": delivered["delivered_at"],
         }
+    return x402
 
+
+def assemble_evidence_doc(
+    inp: UrlSummaryInput,
+    delivered: dict,
+    x402: dict,
+    *,
+    payment_evidence: str,
+    issuer_agent: str,
+    now: datetime,
+) -> dict:
+    """Assemble the common evidence-doc envelope around an x402 payment block.
+
+    `payment_evidence` ("x402_demo" | "x402_live") is carried explicitly so the
+    mode is visible in the evidence doc and the preserved run report. Gate-mode
+    authority handling is identical for both payment modes."""
+    resource_url = delivered["requested_url"]
+    mode = (inp.mode or "record").strip().lower()
     doc: dict[str, Any] = {
         "endpoint": "/pay/url-summary",
-        "payment_evidence": "x402_demo",
+        "payment_evidence": payment_evidence,
         "mode": mode,
         "request": {"target_url": resource_url},
         "x402": x402,
-        "issuer_agent": DEMO_ISSUER_AGENT,
-        "issued_at": issued_at,
+        "issuer_agent": issuer_agent,
+        "issued_at": now.isoformat().replace("+00:00", "Z"),
         "delivered_object": delivered,
         "authority": {
             "acting_party": "resource_server",
@@ -300,15 +343,118 @@ def build_demo_evidence_doc(inp: UrlSummaryInput, delivered: dict, *, now: datet
     return doc
 
 
+def build_demo_evidence_doc(inp: UrlSummaryInput, delivered: dict, *, now: datetime) -> dict:
+    """Build the controlled `x402_demo` evidence doc in the committed
+    `normalize_demo` shape (back-compat helper around the split builders)."""
+    x402 = build_demo_x402_block(inp, delivered, now=now)
+    return assemble_evidence_doc(
+        inp,
+        delivered,
+        x402,
+        payment_evidence=MODE_DEMO,
+        issuer_agent=DEMO_ISSUER_AGENT,
+        now=now,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Endpoint
 # ---------------------------------------------------------------------------
 
-def run_url_summary(inp: UrlSummaryInput) -> dict:
-    """Pure (testable) core: deliver -> normalize -> committed SAR-402 -> result."""
+DEMO_NOTE = (
+    "Controlled demo payment evidence — NOT a real on-chain settlement. See "
+    "reports/sar402-demo/real-x402-payment-evidence-report-v0.1.md for the "
+    "blocker to real x402 and the next bounded pass."
+)
+LIVE_NOTE = (
+    "Real x402 payment evidence — verified (and, in record mode, settled) "
+    "through the configured x402 facilitator. payment_ref is the real on-chain "
+    "settlement transaction reference."
+)
+
+
+def build_evidence_for_mode(
+    inp: UrlSummaryInput,
+    delivered: dict,
+    *,
+    now: datetime,
+    env: Optional[dict] = None,
+    facilitator: Optional[FacilitatorClient] = None,
+) -> tuple[dict, str]:
+    """Resolve the payment mode and build the matching evidence doc.
+
+    Returns `(evidence_doc, payment_evidence_label)`. The live path runs the
+    real facilitator verify/settle flow and refuses to proceed unless the
+    payment is actually verified — it never falls back to demo evidence."""
+    config = load_x402_config(mode_override=inp.payment_mode, env=env)
+
+    if config.mode == MODE_DEMO:
+        x402 = build_demo_x402_block(inp, delivered, now=now)
+        doc = assemble_evidence_doc(
+            inp, delivered, x402,
+            payment_evidence=MODE_DEMO,
+            issuer_agent=DEMO_ISSUER_AGENT,
+            now=now,
+        )
+        return doc, MODE_DEMO
+
+    # ---- x402_live ---------------------------------------------------------
+    record_mode = (inp.mode or "record").strip().lower() == "record"
+    if not inp.x402_payment:
+        raise HTTPException(
+            status_code=422,
+            detail="x402_live mode requires an `x402_payment` payload to verify "
+            "through the configured facilitator. Refusing to label demo "
+            "evidence as a real settlement.",
+        )
+    resource_url = delivered["requested_url"]
+    result = verify_and_settle(
+        config,
+        resource=resource_url,
+        payment_payload=inp.x402_payment,
+        settle=record_mode,
+        facilitator=facilitator,
+    )
+    x402 = build_live_x402_block(
+        config, result,
+        resource=resource_url,
+        delivered=delivered,
+        now=now,
+        record_mode=record_mode,
+    )
+    issuer_agent = f"agent:attest-service:pay-url-summary-live:{config.network}"
+    doc = assemble_evidence_doc(
+        inp, delivered, x402,
+        payment_evidence=MODE_LIVE,
+        issuer_agent=issuer_agent,
+        now=now,
+    )
+    return doc, MODE_LIVE
+
+
+def run_url_summary(
+    inp: UrlSummaryInput,
+    *,
+    env: Optional[dict] = None,
+    facilitator: Optional[FacilitatorClient] = None,
+) -> dict:
+    """Pure (testable) core: deliver -> (demo|live) evidence -> committed
+    SAR-402 -> result. `env`/`facilitator` are injectable for tests."""
     now = datetime.now(timezone.utc)
     delivered = build_delivery_object(inp, now=now)
-    doc = build_demo_evidence_doc(inp, delivered, now=now)
+
+    try:
+        doc, payment_evidence = build_evidence_for_mode(
+            inp, delivered, now=now, env=env, facilitator=facilitator
+        )
+    except X402ConfigError as exc:
+        # Missing/invalid live config is a clear, bounded client error.
+        raise HTTPException(status_code=400, detail=f"x402 config error: {exc}")
+    except X402VerificationError as exc:
+        # Payment could not be verified/settled — no receipt is produced.
+        raise HTTPException(
+            status_code=402, detail=f"x402 payment not verified: {exc}"
+        )
 
     try:
         result = run_evidence_doc(
@@ -327,14 +473,11 @@ def run_url_summary(inp: UrlSummaryInput) -> dict:
 
     receipt = result.receipt
     report = result.report or {}
+    payment_block = receipt.get("payment") or {}
     return {
         "endpoint": "/pay/url-summary",
-        "payment_evidence": "x402_demo",
-        "payment_evidence_note": (
-            "Controlled demo payment evidence — NOT a real on-chain settlement. "
-            "See reports/sar402-demo/url-summary-demo-report-v0.1.md for the "
-            "blocker to real x402 and the next bounded pass."
-        ),
+        "payment_evidence": payment_evidence,
+        "payment_evidence_note": DEMO_NOTE if payment_evidence == MODE_DEMO else LIVE_NOTE,
         "delivered": delivered,
         "receipt_summary": {
             "schema_id": receipt.get("schema_id"),
@@ -348,6 +491,8 @@ def run_url_summary(inp: UrlSummaryInput) -> dict:
             "continuity": receipt.get("continuity"),
             "authority_binding": receipt.get("authority_binding"),
             "integrity_digest": (receipt.get("integrity") or {}).get("digest"),
+            "payment_ref": payment_block.get("payment_ref"),
+            "facilitator": payment_block.get("facilitator"),
         },
         "artifacts": report.get("artifacts"),
         "run_id": report.get("run_id"),
@@ -357,6 +502,7 @@ def run_url_summary(inp: UrlSummaryInput) -> dict:
 
 @router.post("/pay/url-summary")
 def pay_url_summary(input: UrlSummaryInput):
-    """Controlled paid URL-summary action that generates a SAR-402 receipt
-    through the committed Morpheus SAR-402 package/layer."""
+    """Paid URL-summary action that generates a SAR-402 receipt through the
+    committed Morpheus SAR-402 package/layer, in `x402_demo` or `x402_live`
+    payment mode."""
     return run_url_summary(input)
