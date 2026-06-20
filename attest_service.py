@@ -67,6 +67,14 @@ from pay_url_summary import router as pay_url_summary_router  # noqa: E402
 
 app.include_router(pay_url_summary_router)
 
+# Public SAR-402 ingestion surface: POST /v1/sar-402/receipts. External x402
+# resource-server middleware submits a normalized, resource-server-built SAR-402
+# receipt; DefaultVerifier validates (committed schema + authority boundary) and
+# records it. The verifier never executes, authorizes, or controls delivery.
+from sar402_receipts import router as sar402_receipts_router  # noqa: E402
+
+app.include_router(sar402_receipts_router)
+
 
 @contextmanager
 def trustscore_cache_file_lock():
