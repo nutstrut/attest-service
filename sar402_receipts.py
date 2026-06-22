@@ -63,10 +63,13 @@ router = APIRouter()
 SUPPORTED_MODES = ("observe", "record")
 REJECTED_MODES = ("gate",)
 
-# Public Explorer URL template. Configurable so the deployment can point at its
-# real Explorer frontend; the receipt is *also* always retrievable via the live
-# backend route returned as `receipt_lookup_path` (proven by tests).
-DEFAULT_EXPLORER_BASE = "https://defaultverifier.com/explorer?receipt_id="
+# Public Explorer URL template. SAR Explorer (https://sarexplorer.com) is the
+# canonical public Explorer surface for SAR-402 receipts. Configurable so the
+# deployment can point at a different Explorer frontend (e.g. the legacy
+# defaultverifier.com/explorer surface, which remains compatible); the receipt
+# is *also* always retrievable via the live backend route returned as
+# `receipt_lookup_path` (proven by tests).
+DEFAULT_EXPLORER_BASE = "https://sarexplorer.com/?receipt_id="
 
 RECEIPT_TYPE = "sar_402_settlement"
 # Closest existing receipt context label; this is an externally-ingested,

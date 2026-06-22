@@ -78,8 +78,9 @@ SDK and backend are aligned today.
 - Confirms `GET /v1/receipts` (recent-receipts surface) includes it.
 
 **Remaining for the public Explorer frontend:** `explorer_url` points at
-`https://defaultverifier.com/explorer?receipt_id=...` (configurable via
-`SAR402_EXPLORER_BASE`). The backend data is fully present and queryable; whether
+`https://sarexplorer.com/?receipt_id=...` (configurable via
+`SAR402_EXPLORER_BASE`; the legacy `defaultverifier.com/explorer` surface
+remains compatible). The backend data is fully present and queryable; whether
 that exact frontend URL renders the receipt depends on the Explorer web app
 surfacing `sar_402_settlement` records from the shared ledger — a frontend
 follow-up. The **provable live link today** is `receipt_lookup_path`

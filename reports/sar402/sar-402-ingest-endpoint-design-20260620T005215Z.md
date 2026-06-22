@@ -96,7 +96,7 @@ already mandatory).
 {
   "status": "recorded",
   "receipt_id": "sha256:...",
-  "explorer_url": "https://defaultverifier.com/explorer?receipt_id=sha256%3A...",
+  "explorer_url": "https://sarexplorer.com/?receipt_id=sha256%3A...",
   "receipt_lookup_path": "/v1/attest/receipt/sha256%3A...",
   "profile": "sar-402",
   "schema_id": "sar_402_settlement_v0.1",
