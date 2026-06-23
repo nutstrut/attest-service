@@ -203,7 +203,7 @@ def build_payload(delivered: dict) -> dict:
         },
         "payment": {
             "resource": delivered["requested_url"],
-            "quote_id": "q_public_demo_v1",
+            "quote_id": "q_public_demo_v2",
             "price": {"amount": "10000", "asset": "USDC", "decimals": 6},
             "amount_paid": {"amount": "10000", "asset": "USDC", "decimals": 6},
             "asset": "USDC",
@@ -214,7 +214,7 @@ def build_payload(delivered: dict) -> dict:
             # is "tx hash / settlement id"). Deliberately NOT a hex-shaped fake
             # tx hash — a reader sees immediately this is a demonstration, not a
             # real settlement transaction.
-            "payment_ref": "demo:canonical-public-demo-20260623",
+            "payment_ref": "demo:canonical-public-demo-v2-20260623",
         },
         "delivery": {
             "delivered_resource": delivered["resolved_url"],
@@ -245,7 +245,7 @@ def build_payload(delivered: dict) -> dict:
             "environment": "test",
         },
         "notes": (
-            "Canonical public SAR-402 demonstration receipt (testnet/demo). "
+            "Canonical public SAR-402 demonstration receipt v2 (testnet/demo). "
             "Recorded evidence only; no DefaultVerifier signature; not mainnet "
             "payment; not legal payment finality."
         ),
@@ -259,11 +259,17 @@ def build_payload(delivered: dict) -> dict:
 def main() -> int:
     now = datetime.now(timezone.utc)
     timestamp = now.strftime("%Y%m%dT%H%M%SZ")
-    artifact_id = f"sar402-canonical-public-demo-{timestamp}"
+    artifact_id = f"sar402-canonical-public-demo-v2-{timestamp}"
 
     delivered = capture_delivered_payload()
     payload = build_payload(delivered)
     expected_receipt_id = payload["integrity"]["digest"]
+
+    # v2 must NOT collide with the v1 digest (which was mis-stored as real_task).
+    V1_RECEIPT_ID = (
+        "sha256:ecbcd91bc7dbd847f7cab1dbe4605878cbed499d7726c1db1acc81e3e6e8b177"
+    )
+    assert expected_receipt_id != V1_RECEIPT_ID, "v2 digest must differ from v1"
 
     # Cross-check: recompute the digest the long way over the payload sans
     # integrity, to prove the report's stated method reproduces the id.
@@ -346,7 +352,7 @@ def render_report(
     lines: list[str] = []
     A = lines.append
 
-    A("# SAR-402 Canonical Public Demo Receipt — PREP (not published)")
+    A("# SAR-402 Canonical Public Demo Receipt — v2 — PREP (not published)")
     A("")
     A(f"**Generated (UTC):** {generated_at}  ")
     A(f"**Artifact id:** `{artifact_id}`  ")
@@ -357,6 +363,26 @@ def render_report(
     A("> This receipt has **not** been ingested. The production ledger was not "
       "touched. The id below is the id the live receipt *will* have iff the "
       "payload is ingested byte-for-byte unchanged.")
+    A("")
+    A("---")
+    A("")
+
+    A("## 0. Why v2 (supersedes v1)")
+    A("")
+    A("The v1 prepared payload "
+      "(`sha256:ecbcd91bc7dbd847f7cab1dbe4605878cbed499d7726c1db1acc81e3e6e8b177`) "
+      "was POSTed to production **before the service restart**, while the live "
+      "service was still running the old code. The POST succeeded but the live "
+      "service ignored the `receipt_context=public_demo` query param and stored "
+      "the ledger record as **`receipt_context: real_task`**. v1 is therefore "
+      "**not** the canonical `public_demo` receipt and must not be reused or "
+      "reposted.")
+    A("")
+    A("After restart, production correctly enforces the constrained context: an "
+      "invalid value now returns HTTP 422 "
+      "`{\"detail\":\"invalid receipt_context: must be one of real_task, "
+      "public_demo\"}`. This v2 payload has a **different digest** from v1 and is "
+      "the canonical artifact to publish as `public_demo`.")
     A("")
     A("---")
     A("")
