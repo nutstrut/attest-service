@@ -1,0 +1,325 @@
+{
+  "artifact_id": "sar402-path-a-demo-20260623T170158Z",
+  "claim": "DefaultVerifier recorded this SAR-402 delivery event, and the receipt is publicly inspectable, payload-bound, and role-separated.",
+  "delivered_payload": {
+    "content_sha256": "sha256:c8221124523d1319943d4e2a2f1e43c9ae8cc70f5818479db75019bd950e472c",
+    "delivered_at": "2026-06-23T17:01:58.176865Z",
+    "delivery_evidence_digest": "sha256:11564f495c9016b1c6d38d46b155a08ccd4d1d7744143eac78cc0f8084b608c8",
+    "excerpt": "<title>SAR-402: Settlement Attestation Receipts for x402</title><p>SAR-402 is an x402-profile Settlement Attestation Receipt. It records what an x402 payment authorized, whether delivery matched the paid-for resource, and what evidence remains for later inspection. The verifier r",
+    "requested_url": "https://defaultverifier.example/explainers/sar-402",
+    "resolved_url": "https://defaultverifier.example/explainers/sar-402",
+    "status_code": 200,
+    "title": "SAR-402: Settlement Attestation Receipts for x402",
+    "word_count": 86
+  },
+  "delivered_payload_provenance": {
+    "mode": "local demo (inline text, network-free, deterministic)",
+    "resource_requested": "URL summary / content fetch",
+    "resource_url": "https://defaultverifier.example/explainers/sar-402",
+    "source": "/pay/url-summary delivery logic (pay_url_summary.build_delivery_object)"
+  },
+  "evidence_digest": "sha256:11564f495c9016b1c6d38d46b155a08ccd4d1d7744143eac78cc0f8084b608c8",
+  "evidence_digest_recomputed": "sha256:11564f495c9016b1c6d38d46b155a08ccd4d1d7744143eac78cc0f8084b608c8",
+  "explorer_url": "https://sarexplorer.com/?receipt_id=sha256%3Aecf8cde8f191f0234e154bb609c77db99fcb3f144221fa4cb095ed2059063185",
+  "explorer_url_recomputed": "https://sarexplorer.com/?receipt_id=sha256%3Aecf8cde8f191f0234e154bb609c77db99fcb3f144221fa4cb095ed2059063185",
+  "forbidden_claims": [
+    "DefaultVerifier cryptographically signed the recorded receipt.",
+    "DefaultVerifier delivered the resource.",
+    "DefaultVerifier authorized access.",
+    "DefaultVerifier executed payment.",
+    "DefaultVerifier proves legal payment finality."
+  ],
+  "generated_at": "2026-06-23T17:01:58.176773+00:00",
+  "limitation": "This is recorded delivery evidence, not a signed DefaultVerifier receipt and not proof of legal payment finality.",
+  "lookup": {
+    "method": "GET",
+    "path": "/v1/attest/receipt/sha256%3Aecf8cde8f191f0234e154bb609c77db99fcb3f144221fa4cb095ed2059063185",
+    "resolved": true
+  },
+  "notes": "Generated offline against a throwaway demo ledger; the production ledger was not touched. Path A only: no signing, no verifier_kid, no schema change, no deployment.",
+  "overclaim_check": {
+    "hits": [],
+    "status": "PASS"
+  },
+  "payload_binding": {
+    "algorithm": "sha256",
+    "canonicalization": "sorted_keys_compact_v0 (json sorted keys, compact separators, ensure_ascii=false), over the delivered object excluding delivery_evidence_digest",
+    "delivered_field": "delivery_evidence_digest",
+    "match": true,
+    "receipt_field": "delivery.evidence_digest"
+  },
+  "receipt": {
+    "authority_binding": {
+      "acting_party": "resource_server",
+      "resource_server_controls_delivery": true,
+      "verifier_controls_resource_release": false,
+      "verifier_has_execution_authority": false
+    },
+    "continuity": {
+      "authority_continuity": "PASS",
+      "constraint_continuity": "PASS",
+      "executor_continuity": "PASS",
+      "object_continuity": "PASS",
+      "temporal_continuity": "PASS"
+    },
+    "delivery": {
+      "delivered_at": "2026-06-23T17:01:58.176865Z",
+      "delivered_resource": "https://defaultverifier.example/explainers/sar-402",
+      "evidence_digest": "sha256:11564f495c9016b1c6d38d46b155a08ccd4d1d7744143eac78cc0f8084b608c8",
+      "evidence_type": "http_response",
+      "status_code": 200
+    },
+    "delivery_state": "confirmed",
+    "identity": {
+      "derived_identity": {
+        "derived_agent_id": "agent:x402:eip155:8453:0xPAYER0000000000000000000000000000000002",
+        "identity_status": "derived",
+        "registration_mode": "derived_from_settlement"
+      },
+      "payer": "0xPAYER0000000000000000000000000000000002"
+    },
+    "integrity": {
+      "canonicalization": "sorted_keys_compact_v0",
+      "digest": "sha256:ecf8cde8f191f0234e154bb609c77db99fcb3f144221fa4cb095ed2059063185",
+      "digest_alg": "sha256"
+    },
+    "issuer": {
+      "environment": "test",
+      "verifier": "DefaultVerifier",
+      "verifier_version": "0.1.0"
+    },
+    "notes": "Path A delivery-evidence demo (testnet/local). Recorded evidence only; no DefaultVerifier signature; not legal payment finality.",
+    "payment": {
+      "amount_paid": {
+        "amount": "10000",
+        "asset": "USDC",
+        "decimals": 6
+      },
+      "asset": "USDC",
+      "chain": "eip155:8453",
+      "payer": "0xPAYER0000000000000000000000000000000002",
+      "payment_ref": "0xdeadbeefdemo",
+      "price": {
+        "amount": "10000",
+        "asset": "USDC",
+        "decimals": 6
+      },
+      "quote_id": "q_demo_path_a",
+      "recipient": "0xRECIPIENT00000000000000000000000000000001",
+      "resource": "https://defaultverifier.example/explainers/sar-402"
+    },
+    "payment_state": "verified",
+    "profile": "sar-402",
+    "sar_type": "Settlement Attestation Receipt",
+    "sar_verdict": "PASS",
+    "schema_id": "sar_402_settlement_v0.1",
+    "settlement_state": "delivered",
+    "timestamps": {
+      "delivered_at": "2026-06-23T17:01:58.176865Z",
+      "issued_at": "2026-06-23T00:00:02Z",
+      "paid_at": "2026-06-23T00:00:00Z",
+      "quote_expires_at": "2026-06-23T00:09:30Z",
+      "quoted_at": "2026-06-23T00:00:00Z",
+      "verified_at": "2026-06-23T00:00:02Z"
+    },
+    "verification_mode": "record",
+    "verification_point": "post_delivery"
+  },
+  "reproduction_steps": [
+    "Open the receipt by its public id: GET https://<attest-host>/v1/attest/receipt/sha256%3Aecf8cde8f191f0234e154bb609c77db99fcb3f144221fa4cb095ed2059063185 -> confirms the record exists in the live ledger.",
+    "Open the Explorer URL: https://sarexplorer.com/?receipt_id=sha256%3Aecf8cde8f191f0234e154bb609c77db99fcb3f144221fa4cb095ed2059063185 -> confirms the same receipt renders on the public inspection surface.",
+    "Recompute the payload binding: obtain the captured delivered payload (section 4), drop delivery_evidence_digest, hash the canonical bytes with SHA-256, compare to delivery.evidence_digest -> confirms the recorded delivered payload was not swapped.",
+    "Read the role-separation fields: issuer.verifier = DefaultVerifier (recorder); authority_binding.acting_party = resource_server (deliverer); verifier_has_execution_authority = false -> confirms recorder != deliverer and the verifier claimed no execution authority.",
+    "Sanity-check states: verification_mode = record; verification_point = post_delivery; settlement_state = delivered; issuer.environment = test (+ notes) -> confirms post-hoc recorded demo/testnet evidence, not gating and not mainnet finality."
+  ],
+  "request": {
+    "http_method": "POST",
+    "http_path": "/v1/sar-402/receipts",
+    "local_invocation": "record_sar402_receipt(payload)"
+  },
+  "response": {
+    "authority_binding": {
+      "acting_party": "resource_server",
+      "verifier_has_execution_authority": false
+    },
+    "explorer_url": "https://sarexplorer.com/?receipt_id=sha256%3Aecf8cde8f191f0234e154bb609c77db99fcb3f144221fa4cb095ed2059063185",
+    "mode": "record",
+    "profile": "sar-402",
+    "receipt": {
+      "authority_binding": {
+        "acting_party": "resource_server",
+        "resource_server_controls_delivery": true,
+        "verifier_controls_resource_release": false,
+        "verifier_has_execution_authority": false
+      },
+      "continuity": {
+        "authority_continuity": "PASS",
+        "constraint_continuity": "PASS",
+        "executor_continuity": "PASS",
+        "object_continuity": "PASS",
+        "temporal_continuity": "PASS"
+      },
+      "delivery": {
+        "delivered_at": "2026-06-23T17:01:58.176865Z",
+        "delivered_resource": "https://defaultverifier.example/explainers/sar-402",
+        "evidence_digest": "sha256:11564f495c9016b1c6d38d46b155a08ccd4d1d7744143eac78cc0f8084b608c8",
+        "evidence_type": "http_response",
+        "status_code": 200
+      },
+      "delivery_state": "confirmed",
+      "identity": {
+        "derived_identity": {
+          "derived_agent_id": "agent:x402:eip155:8453:0xPAYER0000000000000000000000000000000002",
+          "identity_status": "derived",
+          "registration_mode": "derived_from_settlement"
+        },
+        "payer": "0xPAYER0000000000000000000000000000000002"
+      },
+      "integrity": {
+        "canonicalization": "sorted_keys_compact_v0",
+        "digest": "sha256:ecf8cde8f191f0234e154bb609c77db99fcb3f144221fa4cb095ed2059063185",
+        "digest_alg": "sha256"
+      },
+      "issuer": {
+        "environment": "test",
+        "verifier": "DefaultVerifier",
+        "verifier_version": "0.1.0"
+      },
+      "notes": "Path A delivery-evidence demo (testnet/local). Recorded evidence only; no DefaultVerifier signature; not legal payment finality.",
+      "payment": {
+        "amount_paid": {
+          "amount": "10000",
+          "asset": "USDC",
+          "decimals": 6
+        },
+        "asset": "USDC",
+        "chain": "eip155:8453",
+        "payer": "0xPAYER0000000000000000000000000000000002",
+        "payment_ref": "0xdeadbeefdemo",
+        "price": {
+          "amount": "10000",
+          "asset": "USDC",
+          "decimals": 6
+        },
+        "quote_id": "q_demo_path_a",
+        "recipient": "0xRECIPIENT00000000000000000000000000000001",
+        "resource": "https://defaultverifier.example/explainers/sar-402"
+      },
+      "payment_state": "verified",
+      "profile": "sar-402",
+      "receipt_id": "sha256:ecf8cde8f191f0234e154bb609c77db99fcb3f144221fa4cb095ed2059063185",
+      "sar_type": "Settlement Attestation Receipt",
+      "sar_verdict": "PASS",
+      "schema_id": "sar_402_settlement_v0.1",
+      "settlement_state": "delivered",
+      "timestamps": {
+        "delivered_at": "2026-06-23T17:01:58.176865Z",
+        "issued_at": "2026-06-23T00:00:02Z",
+        "paid_at": "2026-06-23T00:00:00Z",
+        "quote_expires_at": "2026-06-23T00:09:30Z",
+        "quoted_at": "2026-06-23T00:00:00Z",
+        "verified_at": "2026-06-23T00:00:02Z"
+      },
+      "verification_mode": "record",
+      "verification_point": "post_delivery"
+    },
+    "receipt_id": "sha256:ecf8cde8f191f0234e154bb609c77db99fcb3f144221fa4cb095ed2059063185",
+    "receipt_lookup_path": "/v1/attest/receipt/sha256%3Aecf8cde8f191f0234e154bb609c77db99fcb3f144221fa4cb095ed2059063185",
+    "schema_backend": "local-structural",
+    "schema_id": "sar_402_settlement_v0.1",
+    "status": "recorded"
+  },
+  "roles": {
+    "acting_party": "resource_server",
+    "issuer_verifier": "DefaultVerifier",
+    "payer_derived_agent_id": "agent:x402:eip155:8453:0xPAYER0000000000000000000000000000000002"
+  },
+  "scope": "path_a_recorded_delivery_evidence",
+  "stored_record": {
+    "activation_id": null,
+    "agent_id": "agent:x402:eip155:8453:0xPAYER0000000000000000000000000000000002",
+    "chain_id": null,
+    "created_at": "2026-06-23T17:01:58Z",
+    "receipt": {
+      "authority_binding": {
+        "acting_party": "resource_server",
+        "resource_server_controls_delivery": true,
+        "verifier_controls_resource_release": false,
+        "verifier_has_execution_authority": false
+      },
+      "continuity": {
+        "authority_continuity": "PASS",
+        "constraint_continuity": "PASS",
+        "executor_continuity": "PASS",
+        "object_continuity": "PASS",
+        "temporal_continuity": "PASS"
+      },
+      "delivery": {
+        "delivered_at": "2026-06-23T17:01:58.176865Z",
+        "delivered_resource": "https://defaultverifier.example/explainers/sar-402",
+        "evidence_digest": "sha256:11564f495c9016b1c6d38d46b155a08ccd4d1d7744143eac78cc0f8084b608c8",
+        "evidence_type": "http_response",
+        "status_code": 200
+      },
+      "delivery_state": "confirmed",
+      "identity": {
+        "derived_identity": {
+          "derived_agent_id": "agent:x402:eip155:8453:0xPAYER0000000000000000000000000000000002",
+          "identity_status": "derived",
+          "registration_mode": "derived_from_settlement"
+        },
+        "payer": "0xPAYER0000000000000000000000000000000002"
+      },
+      "integrity": {
+        "canonicalization": "sorted_keys_compact_v0",
+        "digest": "sha256:ecf8cde8f191f0234e154bb609c77db99fcb3f144221fa4cb095ed2059063185",
+        "digest_alg": "sha256"
+      },
+      "issuer": {
+        "environment": "test",
+        "verifier": "DefaultVerifier",
+        "verifier_version": "0.1.0"
+      },
+      "notes": "Path A delivery-evidence demo (testnet/local). Recorded evidence only; no DefaultVerifier signature; not legal payment finality.",
+      "payment": {
+        "amount_paid": {
+          "amount": "10000",
+          "asset": "USDC",
+          "decimals": 6
+        },
+        "asset": "USDC",
+        "chain": "eip155:8453",
+        "payer": "0xPAYER0000000000000000000000000000000002",
+        "payment_ref": "0xdeadbeefdemo",
+        "price": {
+          "amount": "10000",
+          "asset": "USDC",
+          "decimals": 6
+        },
+        "quote_id": "q_demo_path_a",
+        "recipient": "0xRECIPIENT00000000000000000000000000000001",
+        "resource": "https://defaultverifier.example/explainers/sar-402"
+      },
+      "payment_state": "verified",
+      "profile": "sar-402",
+      "receipt_id": "sha256:ecf8cde8f191f0234e154bb609c77db99fcb3f144221fa4cb095ed2059063185",
+      "sar_type": "Settlement Attestation Receipt",
+      "sar_verdict": "PASS",
+      "schema_id": "sar_402_settlement_v0.1",
+      "settlement_state": "delivered",
+      "timestamps": {
+        "delivered_at": "2026-06-23T17:01:58.176865Z",
+        "issued_at": "2026-06-23T00:00:02Z",
+        "paid_at": "2026-06-23T00:00:00Z",
+        "quote_expires_at": "2026-06-23T00:09:30Z",
+        "quoted_at": "2026-06-23T00:00:00Z",
+        "verified_at": "2026-06-23T00:00:02Z"
+      },
+      "verification_mode": "record",
+      "verification_point": "post_delivery"
+    },
+    "receipt_context": "real_task",
+    "receipt_id": "sha256:ecf8cde8f191f0234e154bb609c77db99fcb3f144221fa4cb095ed2059063185",
+    "receipt_type": "sar_402_settlement"
+  }
+}
