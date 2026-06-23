@@ -44,7 +44,7 @@ import os
 from typing import Any, Mapping, Optional
 from urllib.parse import quote
 
-from fastapi import APIRouter, Body, Header, HTTPException
+from fastapi import APIRouter, Body, Header, HTTPException, Query
 
 # The committed, authoritative SAR-402 validator + schema (single source of
 # truth). We validate through it; we never bypass or re-implement the schema.
@@ -77,9 +77,23 @@ DEFAULT_EXPLORER_BASE = "https://sarexplorer.com/?receipt_id="
 # settlement receipt. It is recording metadata only — it does NOT assert that
 # DefaultVerifier signed, delivered, authorized, executed, or finalized anything.
 RECEIPT_TYPE = "sar_402_settlement"
-# Closest existing receipt context label; this is an externally-ingested,
-# real (non-demo) settlement receipt.
+# Default receipt context for this ingestion surface: an externally-ingested,
+# real (non-demo) settlement receipt. This MUST remain the default — the live
+# path is used by real resource servers submitting genuine settlements, so we
+# never silently relabel those as a demo.
 RECEIPT_CONTEXT = "real_task"
+
+# The deliberate public-demonstration context. It is an explicit, constrained
+# opt-in (never the default): used only when DefaultVerifier intentionally
+# publishes a canonical public SAR-402 demo receipt. Allowing this value lets
+# such a receipt be published truthfully as a demonstration artifact instead of
+# masquerading as a real_task.
+DEMO_RECEIPT_CONTEXT = "public_demo"
+
+# Allowed receipt contexts a caller may select on *this* ingestion surface.
+# Intentionally narrower than the full ReceiptContext enum: activation_demo /
+# continuity_pair belong to other flows and are not selectable here.
+ALLOWED_RECEIPT_CONTEXTS = (RECEIPT_CONTEXT, DEMO_RECEIPT_CONTEXT)
 
 
 # ---------------------------------------------------------------------------
@@ -218,6 +232,7 @@ def record_sar402_receipt(
     authorization: Optional[str] = None,
     env: Optional[Mapping[str, str]] = None,
     persist: bool = True,
+    receipt_context: Optional[str] = None,
 ) -> dict[str, Any]:
     """Ingest one SAR-402 receipt. Pure/testable core for the route.
 
@@ -257,6 +272,18 @@ def record_sar402_receipt(
     It does NOT claim DefaultVerifier signed, delivered, authorized, executed, or
     proved legal finality."""
     check_auth(authorization, env)
+
+    # Constrained receipt-context selection. Default is real_task (the live path
+    # is used by real resource servers). public_demo is an explicit opt-in for a
+    # deliberate public demonstration receipt. Arbitrary client-supplied contexts
+    # are NOT permitted: an invalid value is a clear 422, not a silent fallback.
+    resolved_context = RECEIPT_CONTEXT if receipt_context is None else receipt_context
+    if resolved_context not in ALLOWED_RECEIPT_CONTEXTS:
+        raise HTTPException(
+            status_code=422,
+            detail="invalid receipt_context: must be one of "
+            + ", ".join(ALLOWED_RECEIPT_CONTEXTS),
+        )
 
     if not isinstance(payload, dict):
         raise HTTPException(status_code=422, detail="request body must be a JSON object")
@@ -315,7 +342,7 @@ def record_sar402_receipt(
             svc.write_receipt(
                 receipt=stored,
                 receipt_type=RECEIPT_TYPE,
-                receipt_context=RECEIPT_CONTEXT,
+                receipt_context=resolved_context,
                 agent_id=derived_agent_id,
             )
         except HTTPException:
@@ -344,9 +371,16 @@ def record_sar402_receipt(
 def ingest_sar402_receipt(
     payload: dict = Body(...),
     authorization: Optional[str] = Header(default=None),
+    receipt_context: Optional[str] = Query(default=None),
 ):
     """Ingest a resource-server-built SAR-402 receipt and record it.
 
     See `record_sar402_receipt` for behavior. Returns the receipt id, the
-    Explorer URL, the live lookup path, and the stored receipt."""
-    return record_sar402_receipt(payload, authorization=authorization)
+    Explorer URL, the live lookup path, and the stored receipt.
+
+    `receipt_context` is an optional, constrained selector: omitted => `real_task`
+    (the default for genuine settlements); `public_demo` is the explicit opt-in
+    for a deliberate public demonstration receipt. Any other value is a 422."""
+    return record_sar402_receipt(
+        payload, authorization=authorization, receipt_context=receipt_context
+    )

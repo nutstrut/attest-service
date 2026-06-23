@@ -7,7 +7,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from contextlib import contextmanager
-from typing import Any, Literal
+from typing import Any, Literal, get_args
 from urllib.parse import quote
 from uuid import uuid4
 
@@ -47,7 +47,7 @@ MAX_LIMIT = 200
 DEFAULT_EXTERNAL_VERIFIER = "Default Settlement"
 
 ActivationStage = Literal["registered", "activated", "activation_failed", "verified", "chained", "continuous"]
-ReceiptContext = Literal["activation_demo", "real_task", "continuity_pair"]
+ReceiptContext = Literal["activation_demo", "real_task", "continuity_pair", "public_demo"]
 
 STAGE_ORDER = {
     "registered": 0,
@@ -1507,7 +1507,7 @@ def list_agent_activations(agent_id: str, limit: int | None = Query(DEFAULT_LIMI
         raise HTTPException(status_code=404, detail="agent not found")
     if stage and stage not in STAGE_ORDER:
         raise HTTPException(status_code=400, detail="invalid stage filter")
-    if receipt_context and receipt_context not in {"activation_demo", "real_task", "continuity_pair"}:
+    if receipt_context and receipt_context not in set(get_args(ReceiptContext)):
         raise HTTPException(status_code=400, detail="invalid receipt_context filter")
 
     activations_by_id: dict[str, dict[str, Any]] = {}

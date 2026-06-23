@@ -27,6 +27,8 @@ from urllib.parse import quote  # noqa: E402
 
 import attest_service as svc  # noqa: E402
 from sar402_receipts import (  # noqa: E402
+    DEMO_RECEIPT_CONTEXT,
+    RECEIPT_CONTEXT,
     RECEIPT_TYPE,
     record_sar402_receipt,
     schema_projection,
@@ -365,3 +367,69 @@ def test_api_key_enforced_only_when_configured():
     # Unset key -> open (early adopter).
     open_ok = record_sar402_receipt(payload, env={}, persist=False)
     assert open_ok["status"] == "recorded"
+
+
+# ---------------------------------------------------------------------------
+# Receipt context: default real_task, constrained public_demo opt-in.
+# The live ingest path is also used for real settlements, so the default MUST
+# stay real_task; public_demo is an explicit, validated opt-in.
+# ---------------------------------------------------------------------------
+
+def test_default_context_is_real_task(tmp_path, monkeypatch):
+    # Absent receipt_context -> stored ledger record is real_task.
+    ledger = tmp_path / "receipts.jsonl"
+    monkeypatch.setattr(svc, "RECEIPT_LEDGER", ledger)
+    payload = _unique_payload("ctx-default")
+    result = record_sar402_receipt(payload)
+    record = svc.get_receipt(result["receipt_id"])
+    assert record["receipt_context"] == "real_task"
+    assert record["receipt_context"] == RECEIPT_CONTEXT
+
+
+def test_explicit_public_demo_context(tmp_path, monkeypatch):
+    # Explicit opt-in -> stored ledger record is public_demo.
+    ledger = tmp_path / "receipts.jsonl"
+    monkeypatch.setattr(svc, "RECEIPT_LEDGER", ledger)
+    payload = _unique_payload("ctx-demo")
+    result = record_sar402_receipt(payload, receipt_context="public_demo")
+    record = svc.get_receipt(result["receipt_id"])
+    assert record["receipt_context"] == "public_demo"
+    assert record["receipt_context"] == DEMO_RECEIPT_CONTEXT
+
+
+def test_invalid_context_rejected_with_clear_message(tmp_path, monkeypatch):
+    # Arbitrary client-supplied context -> 422 with the exact developer-facing
+    # message, and nothing stored.
+    ledger = tmp_path / "receipts.jsonl"
+    monkeypatch.setattr(svc, "RECEIPT_LEDGER", ledger)
+    payload = _unique_payload("ctx-bad")
+    with pytest.raises(HTTPException) as exc:
+        record_sar402_receipt(payload, receipt_context="activation_demo")
+    assert exc.value.status_code == 422
+    assert exc.value.detail == (
+        "invalid receipt_context: must be one of real_task, public_demo"
+    )
+    _assert_nothing_stored(ledger)
+
+
+def test_context_filter_accepts_public_demo_and_rejects_garbage(monkeypatch):
+    # The list_agent_activations receipt_context filter validates against the
+    # ReceiptContext enum (derived via get_args), so public_demo is accepted and
+    # garbage is rejected with 400. The agent-existence check runs first, so we
+    # stub latest_agent to a truthy value to reach the context-filter branch.
+    monkeypatch.setattr(svc, "latest_agent", lambda agent_id: {"agent_id": agent_id})
+
+    # Garbage context -> 400 on the filter check.
+    with pytest.raises(HTTPException) as bad:
+        svc.list_agent_activations(
+            "agent:demo", limit=None, receipt_context="not-a-context"
+        )
+    assert bad.value.status_code == 400
+    assert bad.value.detail == "invalid receipt_context filter"
+
+    # public_demo passes the filter: no exception, returns a result envelope.
+    result = svc.list_agent_activations(
+        "agent:demo", limit=None, receipt_context="public_demo"
+    )
+    assert result["agent_id"] == "agent:demo"
+    assert "activations" in result
