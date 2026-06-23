@@ -23,8 +23,11 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from urllib.parse import quote  # noqa: E402
+
 import attest_service as svc  # noqa: E402
 from sar402_receipts import (  # noqa: E402
+    RECEIPT_TYPE,
     record_sar402_receipt,
     schema_projection,
 )
@@ -159,6 +162,102 @@ def test_receipt_is_persisted_and_discoverable(tmp_path, monkeypatch):
     assert any(r["receipt_id"] == receipt_id for r in recent["receipts"])
     # The returned lookup path targets that live route.
     assert result["receipt_lookup_path"].endswith(receipt_id.replace(":", "%3A"))
+
+
+# ---------------------------------------------------------------------------
+# Path A wrapper contract (explicit field-level hardening: T2/T3/T5/T7/T8/T9).
+# No behavior change is asserted here — these pin the already-shipped wrapper
+# contract so it cannot drift. No signing, no verifier_kid, no schema change.
+# ---------------------------------------------------------------------------
+
+def test_receipt_id_equals_integrity_digest():
+    # T9: receipt_id is the inbound integrity.digest, adopted verbatim (not
+    # generated, not recomputed, not signed by DefaultVerifier).
+    payload = _unique_payload("idmap")
+    result = record_sar402_receipt(payload, persist=False)
+    assert result["receipt_id"] == payload["integrity"]["digest"]
+
+
+def test_response_returns_inner_receipt():
+    # T5: the response carries the full inner SAR-402 payload with the adopted
+    # receipt_id injected; the inner schema is otherwise unchanged.
+    payload = _unique_payload("inner")
+    result = record_sar402_receipt(payload, persist=False)
+    receipt = result["receipt"]
+    assert receipt["receipt_id"] == result["receipt_id"]
+    assert receipt["schema_id"] == payload["schema_id"]
+    assert receipt["profile"] == payload["profile"]
+    assert receipt["integrity"]["digest"] == result["receipt_id"]
+    # Inner payload preserved field-for-field (plus only the injected id).
+    assert receipt["payment"] == payload["payment"]
+    assert receipt["delivery"] == payload["delivery"]
+    assert set(receipt) == set(payload) | {"receipt_id"}
+
+
+def test_response_returns_explicit_receipt_lookup_path():
+    # T3: the lookup path is the live backend route, URL-encoded, under the
+    # field name receipt_lookup_path (not lookup_path).
+    payload = _unique_payload("lookup")
+    result = record_sar402_receipt(payload, persist=False)
+    receipt_id = result["receipt_id"]
+    assert "lookup_path" not in result  # the field is receipt_lookup_path
+    assert result["receipt_lookup_path"] == "/v1/attest/receipt/" + quote(
+        receipt_id, safe=""
+    )
+
+
+def test_response_returns_explorer_url():
+    # T4 (explicit): public Explorer URL keyed by the URL-encoded receipt_id.
+    payload = _unique_payload("explorer")
+    result = record_sar402_receipt(payload, persist=False)
+    receipt_id = result["receipt_id"]
+    assert result["explorer_url"].startswith("http")
+    assert result["explorer_url"].endswith(quote(receipt_id, safe=""))
+
+
+def test_stored_record_receipt_type_value(tmp_path, monkeypatch):
+    # T2 + T7: the stored ledger record carries receipt_type, and its value is
+    # exactly "sar_402_settlement". (receipt_type lives on the ledger record,
+    # not on the POST response.)
+    ledger = tmp_path / "receipts.jsonl"
+    monkeypatch.setattr(svc, "RECEIPT_LEDGER", ledger)
+    payload = _unique_payload("rtype")
+    result = record_sar402_receipt(payload)
+    record = svc.get_receipt(result["receipt_id"])
+    assert record["receipt_type"] == "sar_402_settlement"
+    assert record["receipt_type"] == RECEIPT_TYPE
+
+
+def test_stored_agent_id_is_payer_derived_when_present(tmp_path, monkeypatch):
+    # T8(a): when the payload carries a derived identity, the stored agent_id is
+    # the payer-derived agent id (not the deliverer).
+    ledger = tmp_path / "receipts.jsonl"
+    monkeypatch.setattr(svc, "RECEIPT_LEDGER", ledger)
+    payload = _unique_payload("agentpresent")
+    expected = payload["identity"]["derived_identity"]["derived_agent_id"]
+    result = record_sar402_receipt(payload)
+    record = svc.get_receipt(result["receipt_id"])
+    assert record["agent_id"] == expected
+    # Documented role separation: agent_id is the payer, not the deliverer.
+    assert record["agent_id"] != payload["authority_binding"]["acting_party"]
+
+
+def test_stored_agent_id_is_none_when_no_derived_identity(tmp_path, monkeypatch):
+    # T8(b): no derived identity -> stored agent_id is None (legitimately
+    # optional). Removing the optional derived_identity must still validate and
+    # record; agent_id simply has no value.
+    ledger = tmp_path / "receipts.jsonl"
+    monkeypatch.setattr(svc, "RECEIPT_LEDGER", ledger)
+    payload = _unique_payload("agentnone")
+    payload["identity"].pop("derived_identity", None)
+    # Re-key after mutating so the id stays content-addressed and unique.
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    payload["integrity"]["digest"] = "sha256:" + hashlib.sha256(
+        canonical.encode()
+    ).hexdigest()
+    result = record_sar402_receipt(payload)
+    record = svc.get_receipt(result["receipt_id"])
+    assert record["agent_id"] is None
 
 
 # ---------------------------------------------------------------------------

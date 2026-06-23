@@ -71,6 +71,11 @@ REJECTED_MODES = ("gate",)
 # `receipt_lookup_path` (proven by tests).
 DEFAULT_EXPLORER_BASE = "https://sarexplorer.com/?receipt_id="
 
+# Stable wrapper `receipt_type` for a recorded SAR-402 settlement receipt. This
+# is a Path A wrapper-contract constant (NOT part of the inner SAR-402 schema):
+# it labels the stored ledger record so a lookup can identify it as a SAR-402
+# settlement receipt. It is recording metadata only — it does NOT assert that
+# DefaultVerifier signed, delivered, authorized, executed, or finalized anything.
 RECEIPT_TYPE = "sar_402_settlement"
 # Closest existing receipt context label; this is an externally-ingested,
 # real (non-demo) settlement receipt.
@@ -218,7 +223,39 @@ def record_sar402_receipt(
 
     Order matters: auth, then doctrine/authority hard-rejects, then committed
     schema validation, then (only if everything passed) persistence. Nothing is
-    stored and no Explorer link is produced for any rejected payload."""
+    stored and no Explorer link is produced for any rejected payload.
+
+    Path A wrapper contract (explicit; the inner SAR-402 schema is unchanged).
+    The recorded receipt has two wrapper shapes around the inner payload: this
+    POST response, and the stored ledger record built by `write_receipt`. The
+    wrapper fields and where they live:
+
+      * ``receipt_id`` (response + ledger record) — adopted verbatim from the
+        inbound ``payload.integrity.digest``. It is a submitter-supplied content
+        hash that DefaultVerifier ADOPTS as the lookup key; it is NOT generated,
+        recomputed, or signed by DefaultVerifier. Required: a missing/blank
+        ``integrity.digest`` is a 422 and nothing is stored.
+      * ``receipt_type`` (ledger record only) — the constant
+        ``RECEIPT_TYPE == "sar_402_settlement"``; identifies the stored record as
+        a SAR-402 settlement receipt. Recording metadata only.
+      * ``agent_id`` (ledger record only) — the PAYER-derived agent id from
+        ``identity.derived_identity.derived_agent_id``, or ``None`` when no
+        derived identity is present (legitimately optional). It is the payer, NOT
+        the deliverer; the deliverer is ``authority_binding.acting_party``.
+      * ``receipt_lookup_path`` (response only) — the live, provable backend
+        route ``/v1/attest/receipt/{receipt_id}`` (note the field name is
+        ``receipt_lookup_path``, not ``lookup_path``).
+      * ``explorer_url`` (response only) — the public SAR Explorer URL keyed by
+        ``receipt_id``.
+      * ``receipt`` (response + ledger record) — the full inner SAR-402 payload
+        with the adopted ``receipt_id`` injected; validated through the committed
+        ``validate_receipt`` before storage.
+
+    This wrapper adds NO signing and NO ``verifier_kid`` (that is Path B). The
+    claim it supports is: "DefaultVerifier recorded this SAR-402 delivery event,
+    and the receipt is publicly inspectable, payload-bound, and role-separated."
+    It does NOT claim DefaultVerifier signed, delivered, authorized, executed, or
+    proved legal finality."""
     check_auth(authorization, env)
 
     if not isinstance(payload, dict):
@@ -259,6 +296,9 @@ def record_sar402_receipt(
     stored = copy.deepcopy(dict(payload))
     stored["receipt_id"] = receipt_id
 
+    # agent_id is the PAYER-derived identity (not the deliverer). It is
+    # legitimately None when the payload carries no derived identity. See the
+    # wrapper contract above; the deliverer is authority_binding.acting_party.
     derived_agent_id = (
         ((payload.get("identity") or {}).get("derived_identity") or {}).get(
             "derived_agent_id"
