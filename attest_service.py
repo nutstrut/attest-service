@@ -75,6 +75,37 @@ from sar402_receipts import router as sar402_receipts_router  # noqa: E402
 
 app.include_router(sar402_receipts_router)
 
+# SAR-402 Path B read surface: GET /v1/sar-402/recording/{receipt_id}. A public,
+# read-only lookup that returns the stored recording-attribution wrapper for an
+# inner receipt (Path B is NOT live; this serves only locally/test-stored
+# wrappers). It never creates, signs, or mutates wrappers, never touches Path A
+# storage, and never creates or requires production keys.
+import os as _os  # noqa: E402
+
+import sar402_recording_store as recording_store  # noqa: E402
+from sar402_recording_wrapper import (  # noqa: E402
+    load_public_key as _load_recording_public_key,
+    verify_recording_wrapper,
+)
+
+
+def _recording_public_key():
+    """Return the recording-attribution VERIFICATION (public) key, or None.
+
+    Loaded from ``SAR402_RECORDING_PUBLIC_KEY_HEX`` only (no default, no embedded
+    key, never a private/production key). Returns None when unconfigured, which
+    the endpoint surfaces as a 503. Tests inject an ephemeral test public key by
+    monkeypatching this function."""
+    return _load_recording_public_key(_os.environ)
+
+
+def _is_valid_receipt_id(receipt_id: str) -> bool:
+    """Inner SAR-402 receipt ids are adopted content hashes: ``sha256:<64 hex>``."""
+    if not isinstance(receipt_id, str) or not receipt_id.startswith("sha256:"):
+        return False
+    hexpart = receipt_id[len("sha256:"):]
+    return len(hexpart) == 64 and all(c in "0123456789abcdef" for c in hexpart)
+
 
 @contextmanager
 def trustscore_cache_file_lock():
@@ -982,6 +1013,59 @@ def get_receipt(receipt_id: str):
     if not receipt:
         raise HTTPException(status_code=404, detail="receipt not found")
     return receipt
+
+
+@app.get("/v1/sar-402/recording/{receipt_id}")
+def get_sar402_recording(receipt_id: str):
+    """SAR-402 Path B: return the recording-attribution wrapper for a receipt.
+
+    Public, read-only. It returns the stored ``sar402_recording_wrapper_v1``
+    envelope for the inner ``receipt_id`` if one exists. It never creates,
+    signs, or mutates a wrapper, never touches Path A storage, and never creates
+    or requires production key material — it verifies the stored wrapper with the
+    configured PUBLIC verification key before returning it.
+
+    A True wrapper here attests to DefaultVerifier's RECORDING act only — not
+    delivery, payment execution, access authorization, release control, mainnet
+    settlement, or legal finality (see the wrapper's authority_boundary).
+
+    Status codes:
+      * 200 — wrapper found and verified;
+      * 404 ``receipt not found`` — no Path A receipt and no wrapper for the id;
+      * 404 ``no recording wrapper found for receipt`` — Path A receipt exists
+        but no Path B wrapper has been recorded;
+      * 422 — malformed receipt id;
+      * 503 ``recording key unavailable`` — no verification key configured;
+      * 500 ``recording wrapper verification failed`` — a stored wrapper failed
+        signature/shape verification (a data-integrity fault; never served as
+        valid)."""
+    if not _is_valid_receipt_id(receipt_id):
+        raise HTTPException(status_code=422, detail="invalid receipt id format")
+
+    wrapper = recording_store.get_recording_wrapper(receipt_id)
+    if wrapper is None:
+        if find_receipt(receipt_id) is not None:
+            raise HTTPException(
+                status_code=404,
+                detail="no recording wrapper found for receipt",
+            )
+        raise HTTPException(status_code=404, detail="receipt not found")
+
+    public_key = _recording_public_key()
+    if public_key is None:
+        raise HTTPException(status_code=503, detail="recording key unavailable")
+
+    if not verify_recording_wrapper(wrapper, public_key=public_key):
+        raise HTTPException(
+            status_code=500, detail="recording wrapper verification failed"
+        )
+
+    return {
+        "receipt_id": receipt_id,
+        "wrapper": wrapper,
+        "lookup_path": f"/v1/sar-402/recording/{quote(receipt_id, safe='')}",
+        "wrapper_type": wrapper.get("wrapper_type"),
+    }
 
 
 @app.post("/v1/agents/register")
