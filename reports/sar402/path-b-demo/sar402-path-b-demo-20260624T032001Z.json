@@ -1,0 +1,260 @@
+{
+  "artifact_id": "sar402-path-b-demo-20260624T032001Z",
+  "authority_boundary": {
+    "does_not_attest_to": [
+      "resource_delivery",
+      "payment_execution",
+      "access_authorization",
+      "release_control",
+      "legal_payment_finality",
+      "mainnet_settlement"
+    ],
+    "signature_attests_to": "recording_attribution_only",
+    "source_evidence_created_by": "resource_server",
+    "verifier_controls_resource_release": false,
+    "verifier_has_execution_authority": false
+  },
+  "claim": "DefaultVerifier recorded this SAR-402 receipt, the recording is attributable to a named verifier key (recording_key_id), and a third party holding the public key can verify that recording attribution.",
+  "demo_public_key_hex_ed25519_raw": "243241bd8c159e175082d664547140988e95843788e8b8964350046edf131c29",
+  "forbidden_claims": [
+    "DefaultVerifier delivered the resource.",
+    "DefaultVerifier executed payment.",
+    "DefaultVerifier authorized access.",
+    "DefaultVerifier controlled release.",
+    "DefaultVerifier proves legal payment finality.",
+    "The signature attests to payment or delivery."
+  ],
+  "generated_at": "2026-06-24T03:20:01.087497+00:00",
+  "key_note": "EPHEMERAL demo key generated for this run only. Not the production verifier key; no production key is used or published here.",
+  "limitation": "The recording signature attests to recording attribution ONLY. It is not a claim of resource delivery, payment execution, access authorization, release control, or legal payment finality. Signing is not execution authority.",
+  "notes": "Generated offline. No deployment, no production ledger write, no production key. Path B only: wrapper-level recording attribution. Inner SAR-402 schema unchanged.",
+  "overclaim_check": {
+    "hits": [],
+    "status": "PASS"
+  },
+  "path_a_response": {
+    "authority_binding": {
+      "acting_party": "resource_server",
+      "verifier_has_execution_authority": false
+    },
+    "explorer_url": "https://sarexplorer.com/?receipt_id=sha256%3Ac22e91f626f13c84563b112f11701f6aa93b9750448077c72916cd8ea6903122",
+    "mode": "record",
+    "profile": "sar-402",
+    "receipt": {
+      "authority_binding": {
+        "acting_party": "resource_server",
+        "resource_server_controls_delivery": true,
+        "verifier_controls_resource_release": false,
+        "verifier_has_execution_authority": false
+      },
+      "continuity": {
+        "authority_continuity": "PASS",
+        "constraint_continuity": "PASS",
+        "executor_continuity": "PASS",
+        "object_continuity": "PASS",
+        "temporal_continuity": "PASS"
+      },
+      "delivery": {
+        "delivered_at": "2026-06-24T03:20:01.087545Z",
+        "delivered_resource": "https://defaultverifier.example/explainers/sar-402",
+        "evidence_digest": "sha256:d8d4209dd071580ad5c3560c1b5a4df3a01260bd8fafa63a99c98c92a52ef1c7",
+        "evidence_type": "http_response",
+        "status_code": 200
+      },
+      "delivery_state": "confirmed",
+      "identity": {
+        "derived_identity": {
+          "derived_agent_id": "agent:x402:eip155:8453:0xPAYER0000000000000000000000000000000002",
+          "identity_status": "derived",
+          "registration_mode": "derived_from_settlement"
+        },
+        "payer": "0xPAYER0000000000000000000000000000000002"
+      },
+      "integrity": {
+        "canonicalization": "sorted_keys_compact_v0",
+        "digest": "sha256:c22e91f626f13c84563b112f11701f6aa93b9750448077c72916cd8ea6903122",
+        "digest_alg": "sha256"
+      },
+      "issuer": {
+        "environment": "test",
+        "verifier": "DefaultVerifier",
+        "verifier_version": "0.1.0"
+      },
+      "notes": "Path A delivery-evidence demo (testnet/local). Recorded evidence only; no DefaultVerifier signature; not legal payment finality.",
+      "payment": {
+        "amount_paid": {
+          "amount": "10000",
+          "asset": "USDC",
+          "decimals": 6
+        },
+        "asset": "USDC",
+        "chain": "eip155:8453",
+        "payer": "0xPAYER0000000000000000000000000000000002",
+        "payment_ref": "0xdeadbeefdemo",
+        "price": {
+          "amount": "10000",
+          "asset": "USDC",
+          "decimals": 6
+        },
+        "quote_id": "q_demo_path_a",
+        "recipient": "0xRECIPIENT00000000000000000000000000000001",
+        "resource": "https://defaultverifier.example/explainers/sar-402"
+      },
+      "payment_state": "verified",
+      "profile": "sar-402",
+      "receipt_id": "sha256:c22e91f626f13c84563b112f11701f6aa93b9750448077c72916cd8ea6903122",
+      "sar_type": "Settlement Attestation Receipt",
+      "sar_verdict": "PASS",
+      "schema_id": "sar_402_settlement_v0.1",
+      "settlement_state": "delivered",
+      "timestamps": {
+        "delivered_at": "2026-06-24T03:20:01.087545Z",
+        "issued_at": "2026-06-23T00:00:02Z",
+        "paid_at": "2026-06-23T00:00:00Z",
+        "quote_expires_at": "2026-06-23T00:09:30Z",
+        "quoted_at": "2026-06-23T00:00:00Z",
+        "verified_at": "2026-06-23T00:00:02Z"
+      },
+      "verification_mode": "record",
+      "verification_point": "post_delivery"
+    },
+    "receipt_id": "sha256:c22e91f626f13c84563b112f11701f6aa93b9750448077c72916cd8ea6903122",
+    "receipt_lookup_path": "/v1/attest/receipt/sha256%3Ac22e91f626f13c84563b112f11701f6aa93b9750448077c72916cd8ea6903122",
+    "schema_backend": "local-structural",
+    "schema_id": "sar_402_settlement_v0.1",
+    "status": "recorded"
+  },
+  "recorded_by": "defaultverifier",
+  "recording_context": "ingestion",
+  "recording_key_id": "sar-demo-ed25519-pathb",
+  "reproduction_steps": [
+    "Obtain the wrapper JSON (section 4) and the demo public key (section 5).",
+    "Drop the recording_signature field; canonicalize the remaining wrapper as sorted-keys/compact UTF-8 JSON (sorted_keys_compact_v0).",
+    "Ed25519-verify the base64-decoded recording_signature.signature over those canonical bytes with the public key -> attribution verifies.",
+    "Confirm wrapped_receipt_id == receipt.receipt_id and wrapped_receipt_digest == receipt.integrity.digest (the recording binds the exact inner receipt; a swapped receipt fails verification).",
+    "Read the authority_boundary block: signature_attests_to = recording_attribution_only and does_not_attest_to lists delivery/payment/access/release/finality (and mainnet settlement on testnet) -> the signature is recording attribution, not delivery/payment authority."
+  ],
+  "scope": "path_b_recording_attribution",
+  "signature_alg": "Ed25519",
+  "verification": {
+    "inner_receipt_tamper_detected": true,
+    "signature_tamper_detected": true,
+    "untampered_verifies": true,
+    "wrapper_field_tamper_detected": true,
+    "wrong_key_rejected": true
+  },
+  "wrapper": {
+    "authority_boundary": {
+      "does_not_attest_to": [
+        "resource_delivery",
+        "payment_execution",
+        "access_authorization",
+        "release_control",
+        "legal_payment_finality",
+        "mainnet_settlement"
+      ],
+      "signature_attests_to": "recording_attribution_only",
+      "source_evidence_created_by": "resource_server",
+      "verifier_controls_resource_release": false,
+      "verifier_has_execution_authority": false
+    },
+    "observed_at": "2026-06-24T03:20:01.087497+00:00",
+    "receipt": {
+      "authority_binding": {
+        "acting_party": "resource_server",
+        "resource_server_controls_delivery": true,
+        "verifier_controls_resource_release": false,
+        "verifier_has_execution_authority": false
+      },
+      "continuity": {
+        "authority_continuity": "PASS",
+        "constraint_continuity": "PASS",
+        "executor_continuity": "PASS",
+        "object_continuity": "PASS",
+        "temporal_continuity": "PASS"
+      },
+      "delivery": {
+        "delivered_at": "2026-06-24T03:20:01.087545Z",
+        "delivered_resource": "https://defaultverifier.example/explainers/sar-402",
+        "evidence_digest": "sha256:d8d4209dd071580ad5c3560c1b5a4df3a01260bd8fafa63a99c98c92a52ef1c7",
+        "evidence_type": "http_response",
+        "status_code": 200
+      },
+      "delivery_state": "confirmed",
+      "identity": {
+        "derived_identity": {
+          "derived_agent_id": "agent:x402:eip155:8453:0xPAYER0000000000000000000000000000000002",
+          "identity_status": "derived",
+          "registration_mode": "derived_from_settlement"
+        },
+        "payer": "0xPAYER0000000000000000000000000000000002"
+      },
+      "integrity": {
+        "canonicalization": "sorted_keys_compact_v0",
+        "digest": "sha256:c22e91f626f13c84563b112f11701f6aa93b9750448077c72916cd8ea6903122",
+        "digest_alg": "sha256"
+      },
+      "issuer": {
+        "environment": "test",
+        "verifier": "DefaultVerifier",
+        "verifier_version": "0.1.0"
+      },
+      "notes": "Path A delivery-evidence demo (testnet/local). Recorded evidence only; no DefaultVerifier signature; not legal payment finality.",
+      "payment": {
+        "amount_paid": {
+          "amount": "10000",
+          "asset": "USDC",
+          "decimals": 6
+        },
+        "asset": "USDC",
+        "chain": "eip155:8453",
+        "payer": "0xPAYER0000000000000000000000000000000002",
+        "payment_ref": "0xdeadbeefdemo",
+        "price": {
+          "amount": "10000",
+          "asset": "USDC",
+          "decimals": 6
+        },
+        "quote_id": "q_demo_path_a",
+        "recipient": "0xRECIPIENT00000000000000000000000000000001",
+        "resource": "https://defaultverifier.example/explainers/sar-402"
+      },
+      "payment_state": "verified",
+      "profile": "sar-402",
+      "receipt_id": "sha256:c22e91f626f13c84563b112f11701f6aa93b9750448077c72916cd8ea6903122",
+      "sar_type": "Settlement Attestation Receipt",
+      "sar_verdict": "PASS",
+      "schema_id": "sar_402_settlement_v0.1",
+      "settlement_state": "delivered",
+      "timestamps": {
+        "delivered_at": "2026-06-24T03:20:01.087545Z",
+        "issued_at": "2026-06-23T00:00:02Z",
+        "paid_at": "2026-06-23T00:00:00Z",
+        "quote_expires_at": "2026-06-23T00:09:30Z",
+        "quoted_at": "2026-06-23T00:00:00Z",
+        "verified_at": "2026-06-23T00:00:02Z"
+      },
+      "verification_mode": "record",
+      "verification_point": "post_delivery"
+    },
+    "recorded_at": "2026-06-24T03:20:01.087497+00:00",
+    "recorded_by": "defaultverifier",
+    "recording_context": "ingestion",
+    "recording_event_id": "rec:bd94f24a-f81e-48d4-9f4c-afb909cb2f6c",
+    "recording_key_id": "sar-demo-ed25519-pathb",
+    "recording_service": "attest-service/sar-402",
+    "recording_signature": {
+      "alg": "Ed25519",
+      "kid": "sar-demo-ed25519-pathb",
+      "signature": "d9OFzatpxvIWCOKVjVr+8ci5IeYoLMm37MvKmM//5enCYXXlDqQ0cmGyGfP9KIheTjHaOHOE9NDl/JbAOt/IAw=="
+    },
+    "signature_alg": "Ed25519",
+    "signed_at": "2026-06-24T03:20:01.087497+00:00",
+    "wrapped_receipt_digest": "sha256:c22e91f626f13c84563b112f11701f6aa93b9750448077c72916cd8ea6903122",
+    "wrapped_receipt_id": "sha256:c22e91f626f13c84563b112f11701f6aa93b9750448077c72916cd8ea6903122",
+    "wrapper_type": "sar402_recording_attribution",
+    "wrapper_version": "sar402_recording_wrapper_v1"
+  },
+  "wrapper_type": "sar402_recording_attribution",
+  "wrapper_version": "sar402_recording_wrapper_v1"
+}

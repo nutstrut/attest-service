@@ -8,8 +8,15 @@ adopted ``receipt_id``) and wraps it in a signed envelope that proves exactly
 one thing:
 
     DefaultVerifier *recorded* this receipt, and that recording act is
-    attributable to a named verifier key (``verifier_kid``), such that a third
-    party holding the public key can verify the attribution.
+    attributable to a named verifier key (``recording_key_id``), such that a
+    third party holding the public key can verify the attribution.
+
+This module implements the governed wrapper contract frozen in Morpheus
+``org/schemas/SAR402_RECORDING_WRAPPER_V1.md`` (commit ``50b0ba8``):
+``wrapper_type = "sar402_recording_attribution"``,
+``wrapper_version = "sar402_recording_wrapper_v1"``. **Path B is not live**: this
+module builds and verifies wrappers for demo/test use only. It neither publishes
+keys, hardcodes a production key, nor has import side effects.
 
 Doctrine boundary (non-negotiable). The recording signature attests to
 RECORDING ATTRIBUTION ONLY. It does NOT attest to, and must never be read as,
@@ -19,19 +26,26 @@ any of:
     * payment execution,
     * access authorization,
     * release control,
-    * legal payment finality.
+    * legal payment finality,
+    * mainnet settlement (when the inner receipt is testnet).
 
 Signing here is NOT execution authority. The verifier records evidence; it does
-not deliver, authorize, execute, or finalize. The ``claims`` block in every
-wrapper states this explicitly and machine-readably.
+not deliver, authorize, execute, or finalize. The ``authority_boundary`` block in
+every wrapper states this explicitly and machine-readably.
+
+``recording_context`` is an enum of exactly ``"observation"`` or ``"ingestion"``.
+``"attestation"`` is FORBIDDEN as a recording context: it can be misread as
+attestation to delivery content, payment, access authorization, release control,
+or finality. Path B attributes recording only.
 
 What the signature covers. The Ed25519 signature is computed over the canonical
-bytes of the wrapper EXCLUDING the ``recording_signature`` field — i.e. over the
-version, recorder, kid, timestamp, receipt_id, the full inner receipt, and the
-claims block. Tampering with any of those (including the inner receipt) breaks
-verification. ``receipt_id`` is ADOPTED verbatim from the inner receipt's
-``integrity.digest`` (the Path A convention); DefaultVerifier does not recompute
-or re-issue the content hash — it signs its *recording* of that content.
+bytes of the wrapper EXCLUDING the ``recording_signature`` field — i.e. over
+every wrapper field, the ``authority_boundary`` block, and the full inner
+receipt. Tampering with any of those (including the inner receipt) breaks
+verification. ``wrapped_receipt_id`` is ADOPTED verbatim from the inner receipt's
+id and ``wrapped_receipt_digest`` from its ``integrity.digest`` (the Path A
+convention); DefaultVerifier does not recompute or re-issue the content hash — it
+signs its *recording* of that content.
 
 Keys. For tests, callers pass the signing/public key explicitly. For an
 operational deployment the key MAY be loaded from the environment (hex-encoded
@@ -43,6 +57,7 @@ from __future__ import annotations
 
 import base64
 import json
+import uuid
 from datetime import datetime, timezone
 from typing import Any, Mapping, Optional
 
@@ -55,17 +70,34 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
 
 # ---------------------------------------------------------------------------
 # Wrapper-contract constants (Path B). None of these are part of the inner
-# SAR-402 schema; they label and bound the recording envelope only.
+# SAR-402 schema; they label and bound the recording envelope only. They mirror
+# Morpheus org/schemas/SAR402_RECORDING_WRAPPER_V1.md (commit 50b0ba8).
 # ---------------------------------------------------------------------------
 
-RECORDING_WRAPPER_VERSION = "sar402_recording_wrapper_v0.1"
+WRAPPER_TYPE = "sar402_recording_attribution"
+WRAPPER_VERSION = "sar402_recording_wrapper_v1"
 RECORDED_BY = "defaultverifier"
+RECORDING_SERVICE = "attest-service/sar-402"
 SIGNATURE_ALG = "Ed25519"
 
-# The machine-readable doctrine boundary carried in every wrapper. The signature
-# attests to recording attribution ONLY; it explicitly does not attest to any of
-# the listed authority/finality properties.
+# Recording-context enum. Exactly these two values are legal. "attestation" is
+# explicitly NOT a member (see module doctrine) and MUST be rejected.
+RECORDING_CONTEXT_OBSERVATION = "observation"
+RECORDING_CONTEXT_INGESTION = "ingestion"
+ALLOWED_RECORDING_CONTEXTS = (
+    RECORDING_CONTEXT_OBSERVATION,
+    RECORDING_CONTEXT_INGESTION,
+)
+DEFAULT_RECORDING_CONTEXT = RECORDING_CONTEXT_INGESTION
+
+# The machine-readable doctrine boundary carried in every wrapper's
+# authority_boundary block. The signature attests to recording attribution ONLY;
+# it explicitly does not attest to any of the listed authority/finality
+# properties.
 SIGNATURE_ATTESTS_TO = "recording_attribution_only"
+SOURCE_EVIDENCE_CREATED_BY = "resource_server"
+
+# Always-disclaimed properties (the minimum required set).
 DOES_NOT_ATTEST_TO = (
     "resource_delivery",
     "payment_execution",
@@ -73,6 +105,9 @@ DOES_NOT_ATTEST_TO = (
     "release_control",
     "legal_payment_finality",
 )
+# Additionally disclaimed when the inner receipt is testnet: the recording does
+# not imply mainnet settlement.
+MAINNET_SETTLEMENT = "mainnet_settlement"
 
 # Env var names (optional; only read by the convenience loaders below).
 ENV_SIGNING_KEY_HEX = "SAR402_RECORDING_SIGNING_KEY_HEX"
@@ -94,15 +129,67 @@ def canonical_bytes(obj: Mapping[str, Any]) -> bytes:
     ).encode("utf-8")
 
 
-def _claims_block() -> dict[str, Any]:
+def _is_testnet(receipt: Mapping[str, Any]) -> bool:
+    """True unless the inner receipt's issuer environment is explicitly mainnet.
+
+    Fail-safe: anything that is not clearly a mainnet/production environment is
+    treated as testnet, so the wrapper disclaims mainnet settlement by default."""
+    issuer = receipt.get("issuer")
+    env = (issuer.get("environment") if isinstance(issuer, dict) else "") or ""
+    return env.strip().lower() not in ("mainnet", "production", "prod")
+
+
+def does_not_attest_to_for(receipt: Mapping[str, Any]) -> list[str]:
+    """The disclaimed-properties list for a given inner receipt.
+
+    Always the required minimum set; plus ``mainnet_settlement`` when the inner
+    receipt is testnet."""
+    disclaimed = list(DOES_NOT_ATTEST_TO)
+    if _is_testnet(receipt):
+        disclaimed.append(MAINNET_SETTLEMENT)
+    return disclaimed
+
+
+def _authority_boundary_block(receipt: Mapping[str, Any]) -> dict[str, Any]:
     return {
         "signature_attests_to": SIGNATURE_ATTESTS_TO,
-        "does_not_attest_to": list(DOES_NOT_ATTEST_TO),
+        "does_not_attest_to": does_not_attest_to_for(receipt),
+        "verifier_has_execution_authority": False,
+        "verifier_controls_resource_release": False,
+        "source_evidence_created_by": SOURCE_EVIDENCE_CREATED_BY,
     }
 
 
+def _authority_boundary_ok(
+    boundary: Any, receipt: Mapping[str, Any]
+) -> bool:
+    """Verify the authority_boundary block is present and not weakened.
+
+    A missing block, a block that asserts verifier execution authority or
+    verifier-controlled release, a wrong ``signature_attests_to`` /
+    ``source_evidence_created_by``, or a ``does_not_attest_to`` list that drops
+    any required disclaimer all FAIL."""
+    if not isinstance(boundary, Mapping):
+        return False
+    if boundary.get("signature_attests_to") != SIGNATURE_ATTESTS_TO:
+        return False
+    if boundary.get("verifier_has_execution_authority") is not False:
+        return False
+    if boundary.get("verifier_controls_resource_release") is not False:
+        return False
+    if boundary.get("source_evidence_created_by") != SOURCE_EVIDENCE_CREATED_BY:
+        return False
+    disclaimed = boundary.get("does_not_attest_to")
+    if not isinstance(disclaimed, (list, tuple)):
+        return False
+    required = set(does_not_attest_to_for(receipt))
+    if not required.issubset(set(disclaimed)):
+        return False
+    return True
+
+
 def _inner_receipt_id(receipt: Mapping[str, Any]) -> str:
-    """The receipt_id is the inner receipt's adopted content hash.
+    """The inner receipt id (adopted as ``wrapped_receipt_id``).
 
     Prefer the explicit ``receipt_id`` Path A injects; fall back to
     ``integrity.digest``. Require the two to agree when both are present."""
@@ -121,9 +208,22 @@ def _inner_receipt_id(receipt: Mapping[str, Any]) -> str:
     return rid
 
 
+def _inner_receipt_digest(receipt: Mapping[str, Any]) -> str:
+    """The inner receipt integrity digest (adopted as ``wrapped_receipt_digest``)."""
+    integrity = receipt.get("integrity")
+    digest = integrity.get("digest") if isinstance(integrity, dict) else None
+    if not digest or not isinstance(digest, str):
+        raise ValueError("inner receipt has no usable integrity.digest")
+    return digest
+
+
 def _signing_view(wrapper: Mapping[str, Any]) -> dict[str, Any]:
     """The exact object that is signed: the wrapper minus the signature field."""
     return {k: v for k, v in wrapper.items() if k != "recording_signature"}
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 # ---------------------------------------------------------------------------
@@ -135,36 +235,69 @@ def build_recording_wrapper(
     *,
     signing_key: Ed25519PrivateKey,
     kid: str,
+    recording_context: str = DEFAULT_RECORDING_CONTEXT,
+    recording_event_id: Optional[str] = None,
+    recording_service: str = RECORDING_SERVICE,
+    observed_at: Optional[str] = None,
     recorded_at: Optional[str] = None,
+    signed_at: Optional[str] = None,
 ) -> dict[str, Any]:
     """Wrap a Path A SAR-402 receipt in a signed recording-attribution envelope.
 
     ``receipt`` is the inner SAR-402 settlement payload (with its adopted
     ``receipt_id`` / ``integrity.digest``). It is embedded verbatim and is NOT
-    mutated. The returned wrapper matches the Path B conceptual shape and carries
-    a detached Ed25519 signature over the canonical wrapper-without-signature.
+    mutated. The returned wrapper matches the governed
+    ``sar402_recording_wrapper_v1`` shape and carries a detached Ed25519
+    signature over the canonical wrapper-without-signature.
+
+    ``recording_context`` MUST be one of ``"observation"`` / ``"ingestion"``;
+    ``"attestation"`` (and any other value) is rejected with ``ValueError``.
 
     The signature attests to recording attribution ONLY (see module doctrine and
-    the ``claims`` block). It is not delivery, payment, access, release, or
-    finality, and signing is not execution authority."""
+    the ``authority_boundary`` block). It is not delivery, payment, access,
+    release, finality, or mainnet settlement, and signing is not execution
+    authority."""
     if not isinstance(receipt, Mapping):
         raise TypeError("receipt must be a mapping")
     if not kid or not isinstance(kid, str):
-        raise ValueError("kid (verifier_kid) is required")
+        raise ValueError("kid (recording_key_id) is required")
+    if recording_context not in ALLOWED_RECORDING_CONTEXTS:
+        raise ValueError(
+            "recording_context must be one of "
+            + ", ".join(ALLOWED_RECORDING_CONTEXTS)
+            + f"; {recording_context!r} is not permitted"
+        )
 
-    receipt_id = _inner_receipt_id(receipt)
+    wrapped_receipt_id = _inner_receipt_id(receipt)
+    wrapped_receipt_digest = _inner_receipt_digest(receipt)
+
+    if recording_event_id is None:
+        recording_event_id = f"rec:{uuid.uuid4()}"
+    if observed_at is None:
+        observed_at = _now_iso()
     if recorded_at is None:
-        recorded_at = datetime.now(timezone.utc).isoformat()
+        recorded_at = _now_iso()
+    if signed_at is None:
+        signed_at = _now_iso()
 
-    # The signed portion (everything except the signature itself).
+    # The signed portion (everything except the signature itself). Inner receipt
+    # is embedded as a deep, JSON-safe copy so the caller's object is not shared.
     signed_view: dict[str, Any] = {
-        "recording_wrapper_version": RECORDING_WRAPPER_VERSION,
+        "wrapper_type": WRAPPER_TYPE,
+        "wrapper_version": WRAPPER_VERSION,
+        "recording_event_id": recording_event_id,
+        "recording_context": recording_context,
         "recorded_by": RECORDED_BY,
-        "verifier_kid": kid,
+        "recording_service": recording_service,
+        "recording_key_id": kid,
+        "wrapped_receipt_id": wrapped_receipt_id,
+        "wrapped_receipt_digest": wrapped_receipt_digest,
+        "observed_at": observed_at,
         "recorded_at": recorded_at,
-        "receipt_id": receipt_id,
-        "receipt": json.loads(json.dumps(receipt)),  # deep, JSON-safe copy
-        "claims": _claims_block(),
+        "signed_at": signed_at,
+        "signature_alg": SIGNATURE_ALG,
+        "authority_boundary": _authority_boundary_block(receipt),
+        "receipt": json.loads(json.dumps(receipt)),
     }
 
     signature = signing_key.sign(canonical_bytes(signed_view))
@@ -188,38 +321,61 @@ def verify_recording_wrapper(
 ) -> bool:
     """Verify recording attribution for a wrapped receipt.
 
-    Returns True only if the Ed25519 signature over the canonical
-    wrapper-without-signature is valid for ``public_key`` AND the wrapper is
-    internally consistent (recorded_by, kid agreement, receipt_id matches the
-    inner receipt's adopted content hash). Any tamper — to the inner receipt, to
-    a wrapper field, or to the signature — returns False.
+    Returns True only if ALL hold:
 
-    This verifies RECORDING ATTRIBUTION ONLY. A True result means "DefaultVerifier
-    recorded this receipt under key ``kid``"; it says nothing about delivery,
-    payment, access, release, or legal finality."""
+      * ``wrapper_type`` / ``wrapper_version`` are the governed constants,
+      * ``recorded_by`` is DefaultVerifier and ``signature_alg`` is Ed25519,
+      * ``recording_context`` is a legal enum value (``"attestation"`` and any
+        other value FAIL),
+      * ``recording_key_id`` matches ``recording_signature.kid`` and
+        ``recording_signature.alg`` matches ``signature_alg``,
+      * ``wrapped_receipt_id`` / ``wrapped_receipt_digest`` match the embedded
+        inner receipt's id / integrity digest,
+      * the ``authority_boundary`` block is present and not weakened, and
+      * the Ed25519 signature over the canonical wrapper-without-signature is
+        valid for ``public_key``.
+
+    Any tamper — to the inner receipt, to a wrapper field, to the authority
+    boundary, or to the signature — returns False.
+
+    This verifies RECORDING ATTRIBUTION ONLY. A True result means
+    "DefaultVerifier recorded this receipt under key ``recording_key_id``"; it
+    says nothing about delivery, payment, access, release, legal finality, or
+    mainnet settlement."""
     if not isinstance(wrapper, Mapping):
+        return False
+
+    if wrapper.get("wrapper_type") != WRAPPER_TYPE:
+        return False
+    if wrapper.get("wrapper_version") != WRAPPER_VERSION:
+        return False
+    if wrapper.get("recorded_by") != RECORDED_BY:
+        return False
+    if wrapper.get("signature_alg") != SIGNATURE_ALG:
+        return False
+    if wrapper.get("recording_context") not in ALLOWED_RECORDING_CONTEXTS:
         return False
 
     sig_block = wrapper.get("recording_signature")
     if not isinstance(sig_block, Mapping):
         return False
-    if sig_block.get("alg") != SIGNATURE_ALG:
+    if sig_block.get("alg") != wrapper.get("signature_alg"):
+        return False
+    if wrapper.get("recording_key_id") != sig_block.get("kid"):
         return False
 
-    # Internal consistency: the signed kid must match the signature-block kid,
-    # the recorder must be DefaultVerifier, and the receipt_id must be the inner
-    # receipt's adopted content hash (not a swapped-in value).
-    if wrapper.get("recorded_by") != RECORDED_BY:
-        return False
-    if wrapper.get("verifier_kid") != sig_block.get("kid"):
-        return False
     receipt = wrapper.get("receipt")
     if not isinstance(receipt, Mapping):
         return False
     try:
-        if wrapper.get("receipt_id") != _inner_receipt_id(receipt):
+        if wrapper.get("wrapped_receipt_id") != _inner_receipt_id(receipt):
+            return False
+        if wrapper.get("wrapped_receipt_digest") != _inner_receipt_digest(receipt):
             return False
     except ValueError:
+        return False
+
+    if not _authority_boundary_ok(wrapper.get("authority_boundary"), receipt):
         return False
 
     try:
@@ -255,7 +411,7 @@ def load_public_key(env: Mapping[str, str]) -> Optional[Ed25519PublicKey]:
 
 
 def load_kid(env: Mapping[str, str]) -> Optional[str]:
-    """Load the configured verifier_kid, or None. No default prod kid."""
+    """Load the configured recording_key_id, or None. No default prod kid."""
     return (env.get(ENV_KID) or "").strip() or None
 
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the SAR-402 Path B recording-attribution demo artifact (v0.1).
+"""Generate the SAR-402 Path B recording-attribution demo artifact (v1).
 
 LOCAL / OFFLINE generator. This does NOT deploy, does NOT touch the production
 receipt ledger, and does NOT publish a production key. It:
@@ -15,7 +15,7 @@ receipt ledger, and does NOT publish a production key. It:
      report.
 
 Path B scope only: this proves *recording attribution* — DefaultVerifier
-recorded this receipt, attributable to a verifier key (``verifier_kid``), and a
+recorded this receipt, attributable to a verifier key (``recording_key_id``), and a
 third party with the public key can verify the attribution. The signature
 attests to recording attribution ONLY. It does NOT attest to resource delivery,
 payment execution, access authorization, release control, or legal payment
@@ -43,11 +43,11 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from sar402_receipts import record_sar402_receipt  # noqa: E402
 from sar402_recording_wrapper import (  # noqa: E402
-    DOES_NOT_ATTEST_TO,
+    DEFAULT_RECORDING_CONTEXT,
     RECORDED_BY,
-    RECORDING_WRAPPER_VERSION,
     SIGNATURE_ALG,
-    SIGNATURE_ATTESTS_TO,
+    WRAPPER_TYPE,
+    WRAPPER_VERSION,
     build_recording_wrapper,
     public_key_hex,
     verify_recording_wrapper,
@@ -63,13 +63,13 @@ from generate_demo import (  # type: ignore  # noqa: E402
 
 OUT_DIR = Path(__file__).resolve().parent
 
-# Demo-only verifier_kid. NOT the production key id; this run uses an ephemeral
+# Demo-only recording_key_id. NOT the production key id; this run uses an ephemeral
 # key generated below and publishes only that ephemeral public key.
 DEMO_KID = "sar-demo-ed25519-pathb"
 
 PATH_B_CLAIM = (
     "DefaultVerifier recorded this SAR-402 receipt, the recording is "
-    "attributable to a named verifier key (verifier_kid), and a third party "
+    "attributable to a named verifier key (recording_key_id), and a third party "
     "holding the public key can verify that recording attribution."
 )
 
@@ -123,7 +123,13 @@ def main() -> int:
     pub_hex = public_key_hex(signing_key)
     recorded_at = now.isoformat()
     wrapper = build_recording_wrapper(
-        inner_receipt, signing_key=signing_key, kid=DEMO_KID, recorded_at=recorded_at
+        inner_receipt,
+        signing_key=signing_key,
+        kid=DEMO_KID,
+        recording_context=DEFAULT_RECORDING_CONTEXT,
+        observed_at=recorded_at,
+        recorded_at=recorded_at,
+        signed_at=recorded_at,
     )
 
     # 3. Verify, then prove tamper-detection (three independent tampers).
@@ -158,11 +164,14 @@ def main() -> int:
         "as sorted-keys/compact UTF-8 JSON (sorted_keys_compact_v0).",
         "Ed25519-verify the base64-decoded recording_signature.signature over "
         "those canonical bytes with the public key -> attribution verifies.",
-        "Confirm receipt_id == receipt.integrity.digest (the recording binds the "
-        "exact inner receipt; a swapped receipt fails verification).",
-        "Read the claims block: signature_attests_to = recording_attribution_only "
-        "and does_not_attest_to lists delivery/payment/access/release/finality -> "
-        "the signature is recording attribution, not delivery/payment authority.",
+        "Confirm wrapped_receipt_id == receipt.receipt_id and "
+        "wrapped_receipt_digest == receipt.integrity.digest (the recording binds "
+        "the exact inner receipt; a swapped receipt fails verification).",
+        "Read the authority_boundary block: signature_attests_to = "
+        "recording_attribution_only and does_not_attest_to lists "
+        "delivery/payment/access/release/finality (and mainnet settlement on "
+        "testnet) -> the signature is recording attribution, not "
+        "delivery/payment authority.",
     ]
 
     copy_corpus = "\n".join(
@@ -179,19 +188,18 @@ def main() -> int:
         "claim": PATH_B_CLAIM,
         "limitation": PATH_B_LIMITATION,
         "forbidden_claims": FORBIDDEN_CLAIMS,
-        "verifier_kid": DEMO_KID,
+        "recording_key_id": DEMO_KID,
         "demo_public_key_hex_ed25519_raw": pub_hex,
         "key_note": (
             "EPHEMERAL demo key generated for this run only. Not the production "
             "verifier key; no production key is used or published here."
         ),
         "signature_alg": SIGNATURE_ALG,
-        "recording_wrapper_version": RECORDING_WRAPPER_VERSION,
+        "wrapper_type": WRAPPER_TYPE,
+        "wrapper_version": WRAPPER_VERSION,
+        "recording_context": wrapper["recording_context"],
         "recorded_by": RECORDED_BY,
-        "claims_block": {
-            "signature_attests_to": SIGNATURE_ATTESTS_TO,
-            "does_not_attest_to": list(DOES_NOT_ATTEST_TO),
-        },
+        "authority_boundary": wrapper["authority_boundary"],
         "path_a_response": path_a,
         "wrapper": wrapper,
         "verification": {
@@ -234,7 +242,7 @@ def main() -> int:
 def render_markdown(d: dict) -> str:
     lines: list[str] = []
     A = lines.append
-    A("# SAR-402 Path B Recording-Attribution Demo — v0.1")
+    A("# SAR-402 Path B Recording-Attribution Demo — v1")
     A("")
     A(f"**Generated (UTC):** {d['generated_at']}  ")
     A(f"**Artifact id:** `{d['artifact_id']}`  ")
@@ -269,12 +277,12 @@ def render_markdown(d: dict) -> str:
     A("## 2. What the signature does and does not attest to")
     A("")
     A("```json")
-    A(json.dumps(d["claims_block"], indent=2, sort_keys=True))
+    A(json.dumps(d["authority_boundary"], indent=2, sort_keys=True))
     A("```")
     A("")
     A("The recording signature is RECORDING ATTRIBUTION ONLY. A valid signature "
       "means \"DefaultVerifier recorded this receipt under "
-      f"`{d['verifier_kid']}`\" — nothing more. It does not assert that "
+      f"`{d['recording_key_id']}`\" — nothing more. It does not assert that "
       "DefaultVerifier delivered the resource, moved or executed payment, "
       "authorized access, controlled release, or proved legal finality. Signing "
       "is not execution authority.")
@@ -302,7 +310,7 @@ def render_markdown(d: dict) -> str:
     A("")
     A("## 5. Verification key (ephemeral demo key)")
     A("")
-    A(f"- `verifier_kid`: `{d['verifier_kid']}`")
+    A(f"- `recording_key_id`: `{d['recording_key_id']}`")
     A(f"- Ed25519 public key (raw, hex): `{d['demo_public_key_hex_ed25519_raw']}`")
     A("")
     A(f"> {d['key_note']}")
