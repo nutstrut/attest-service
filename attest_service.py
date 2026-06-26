@@ -88,6 +88,18 @@ from sar402_recording_wrapper import (  # noqa: E402
     verify_recording_wrapper,
 )
 
+# Hosted Path C, Step 1: the Action Commitment / committed-request registry.
+# Public read/write surface that preserves the committed request/action chain
+# (body_digest -> request_digest -> action_ref) so a LATER hosted deterministic
+# evaluator can retrieve the committed acceptance spec by action_ref. This
+# registry does NOT evaluate, does NOT sign, and does NOT prove execution,
+# spec satisfaction, or release. It uses its own append-only ledger.
+import action_commitment_store as commitment_store  # noqa: E402
+from action_commitment_store import (  # noqa: E402
+    ActionCommitmentConflict,
+    ActionCommitmentRecordError,
+)
+
 
 def _recording_public_key():
     """Return the recording-attribution VERIFICATION (public) key, or None.
@@ -1065,6 +1077,77 @@ def get_sar402_recording(receipt_id: str):
         "wrapper": wrapper,
         "lookup_path": f"/v1/sar-402/recording/{quote(receipt_id, safe='')}",
         "wrapper_type": wrapper.get("wrapper_type"),
+    }
+
+
+@app.post("/v1/action-commitments")
+def post_action_commitment(record: dict):
+    """Hosted Path C, Step 1: store a committed Action Commitment record.
+
+    Persists a record whose request/action chain
+    (body_digest -> request_digest -> action_ref) is validated and recomputed
+    before writing, so a LATER hosted deterministic evaluator can retrieve the
+    committed acceptance spec by action_ref instead of trusting a
+    caller-submitted spec. This route does NOT evaluate, sign, or prove
+    execution / spec satisfaction / release.
+
+    Status codes:
+      * 200 — stored (``stored: true`` for a new write, ``stored: false`` for
+        an idempotent re-submission of the identical record);
+      * 422 — malformed record / digest-chain mismatch;
+      * 409 — a different record already exists for the same action_ref."""
+    try:
+        wrote = commitment_store.store_action_commitment(record)
+    except ActionCommitmentConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except ActionCommitmentRecordError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    action_ref = record["action_ref"]
+    return {
+        "status": "stored",
+        "stored": wrote,
+        "action_ref": action_ref,
+        "lookup_path": f"/v1/action-commitments/{quote(action_ref, safe='')}",
+    }
+
+
+@app.get("/v1/action-commitments/{action_ref}")
+def get_action_commitment(action_ref: str):
+    """Hosted Path C, Step 1: return the committed Action Commitment record.
+
+    Public, read-only. Returns the stored record for ``action_ref`` so a later
+    evaluator can retrieve the committed spec. This route does NOT evaluate
+    anything.
+
+    Status codes:
+      * 200 — record found;
+      * 404 — no record for the action_ref;
+      * 422 — malformed action_ref;
+      * 500 — a stored record cannot be resolved (data-integrity fault; never
+        served as a partial record)."""
+    if not commitment_store._is_sha256(action_ref):
+        raise HTTPException(status_code=422, detail="invalid action_ref format")
+
+    record = commitment_store.get_action_commitment(action_ref)
+    if record is None:
+        raise HTTPException(status_code=404, detail="action commitment not found")
+
+    try:
+        has_profile = (
+            commitment_store.extract_conditional_release_profile(record) is not None
+        )
+    except Exception as exc:  # pragma: no cover - data-integrity fault
+        raise HTTPException(
+            status_code=500,
+            detail=f"action commitment record could not be resolved: {exc}",
+        )
+
+    return {
+        "action_ref": action_ref,
+        "record": record,
+        "has_conditional_release_profile": has_profile,
+        "lookup_path": f"/v1/action-commitments/{quote(action_ref, safe='')}",
     }
 
 
