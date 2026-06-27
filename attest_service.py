@@ -100,6 +100,20 @@ from action_commitment_store import (  # noqa: E402
     ActionCommitmentRecordError,
 )
 
+# Hosted Path C, Step 2A: UNSIGNED deterministic evaluation. The evaluator
+# retrieves the committed acceptance spec by action_ref from the Action
+# Commitment record and NEVER accepts a caller-submitted acceptance_spec (that
+# would allow spec substitution). Step 2A does NOT sign, does NOT issue a
+# Continuity Evaluation Receipt, and claims no payment / release / execution /
+# correctness / legal finality.
+import deterministic_evaluator as det_evaluator  # noqa: E402
+import deterministic_evaluation_store as evaluation_store  # noqa: E402
+from deterministic_evaluator import DeterministicEvaluationError  # noqa: E402
+from deterministic_evaluation_store import (  # noqa: E402
+    DeterministicEvaluationConflict,
+    DeterministicEvaluationRecordError,
+)
+
 
 def _recording_public_key():
     """Return the recording-attribution VERIFICATION (public) key, or None.
@@ -1148,6 +1162,139 @@ def get_action_commitment(action_ref: str):
         "record": record,
         "has_conditional_release_profile": has_profile,
         "lookup_path": f"/v1/action-commitments/{quote(action_ref, safe='')}",
+    }
+
+
+class DeterministicEvaluateInput(BaseModel):
+    """Input for POST /v1/evaluate/deterministic.
+
+    Only ``action_ref`` + ``submitted_output`` are accepted. ``extra=forbid``
+    means ANY additional field — including a caller-submitted ``acceptance_spec``
+    — is rejected with 422. The committed spec is retrieved server-side by
+    ``action_ref`` so the caller cannot substitute the spec at evaluation time."""
+
+    model_config = {"extra": "forbid"}
+
+    action_ref: str
+    submitted_output: dict
+
+
+# Bounded-claim string stamped onto every unsigned Step 2A record so the record
+# cannot be mistaken for a signed receipt or a release/execution proof.
+_DETERMINISTIC_EVALUATION_BOUNDED_CLAIM = (
+    "A deterministic evaluator applied a committed acceptance spec to a "
+    "submitted output and produced a recorded result. This record is UNSIGNED: "
+    "it is not a Continuity Evaluation Receipt, not a signed receipt, not proof "
+    "of execution, not proof of payment or resource-release finality, not an "
+    "actual release, and not a statement of objective correctness or legal "
+    "sufficiency."
+)
+
+
+@app.post("/v1/evaluate/deterministic")
+def post_evaluate_deterministic(input: DeterministicEvaluateInput):
+    """Hosted Path C, Step 2A: evaluate a submitted output against the COMMITTED spec.
+
+    The acceptance spec is NEVER taken from the caller — it is retrieved from the
+    committed Action Commitment record by ``action_ref`` (covered by
+    body_digest -> request_digest -> action_ref), preventing spec substitution.
+    The produced record is UNSIGNED (see ``_DETERMINISTIC_EVALUATION_BOUNDED_CLAIM``).
+
+    Status codes:
+      * 200 — evaluated and stored (``stored: true`` for a new write,
+        ``stored: false`` for an idempotent identical re-submission);
+      * 404 — no committed Action Commitment for the action_ref;
+      * 422 — malformed action_ref, caller-submitted acceptance_spec / extra
+        field, no committed conditional-release profile / acceptance_spec, or a
+        bad committed spec shape;
+      * 409 — a different evaluation already exists for this action_ref."""
+    action_ref = input.action_ref
+    if not evaluation_store.is_valid_action_ref(action_ref):
+        raise HTTPException(status_code=422, detail="invalid action_ref format")
+
+    commitment = commitment_store.get_action_commitment(action_ref)
+    if commitment is None:
+        raise HTTPException(status_code=404, detail="action commitment not found")
+
+    profile = commitment_store.extract_conditional_release_profile(commitment)
+    if profile is None:
+        raise HTTPException(
+            status_code=422,
+            detail="committed action has no conditional-release profile to evaluate",
+        )
+    acceptance_spec = profile.get("acceptance_spec")
+    if not isinstance(acceptance_spec, dict):
+        raise HTTPException(
+            status_code=422,
+            detail="committed conditional-release profile has no acceptance_spec",
+        )
+
+    try:
+        outcome = det_evaluator.evaluate_acceptance_spec(
+            acceptance_spec, input.submitted_output
+        )
+    except DeterministicEvaluationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    release_policy = profile.get("release_policy")
+    declared_release_intent = det_evaluator.derive_declared_release_intent(
+        outcome["result"], release_policy if isinstance(release_policy, dict) else None
+    )
+
+    record = {
+        "record_type": evaluation_store.RECORD_TYPE,
+        "record_version": evaluation_store.RECORD_VERSION,
+        "action_ref": action_ref,
+        "spec_id": acceptance_spec.get("spec_id"),
+        "evaluator_type": "deterministic",
+        "result": outcome["result"],
+        "checks": outcome["checks"],
+        "declared_release_intent": declared_release_intent,
+        "submitted_output": input.submitted_output,
+        "bounded_claim": _DETERMINISTIC_EVALUATION_BOUNDED_CLAIM,
+    }
+
+    try:
+        wrote = evaluation_store.store_deterministic_evaluation(record)
+    except DeterministicEvaluationConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except DeterministicEvaluationRecordError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    return {
+        "status": "evaluated",
+        "stored": wrote,
+        "action_ref": action_ref,
+        "result": record["result"],
+        "declared_release_intent": declared_release_intent,
+        "evaluation_lookup_path": f"/v1/evaluate/deterministic/{quote(action_ref, safe='')}",
+        "record": record,
+    }
+
+
+@app.get("/v1/evaluate/deterministic/{action_ref}")
+def get_evaluate_deterministic(action_ref: str):
+    """Hosted Path C, Step 2A: return the stored UNSIGNED evaluation record.
+
+    Public, read-only. Does NOT re-evaluate, does NOT sign.
+
+    Status codes:
+      * 200 — evaluation record found;
+      * 404 — no evaluation record for the action_ref;
+      * 422 — malformed action_ref."""
+    if not evaluation_store.is_valid_action_ref(action_ref):
+        raise HTTPException(status_code=422, detail="invalid action_ref format")
+
+    record = evaluation_store.get_deterministic_evaluation(action_ref)
+    if record is None:
+        raise HTTPException(status_code=404, detail="deterministic evaluation not found")
+
+    return {
+        "action_ref": action_ref,
+        "result": record.get("result"),
+        "declared_release_intent": record.get("declared_release_intent"),
+        "record": record,
+        "evaluation_lookup_path": f"/v1/evaluate/deterministic/{quote(action_ref, safe='')}",
     }
 
 
