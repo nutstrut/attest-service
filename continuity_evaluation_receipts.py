@@ -327,8 +327,14 @@ def build_continuity_evaluation_core(
     evaluator_id: str,
     policy_ref: str,
     evaluated_at: str,
+    reason_code: Optional[str] = None,
 ) -> dict[str, Any]:
-    """Build + validate the unsigned canonical core (ds.continuity_evaluation.v0.1)."""
+    """Build + validate the unsigned canonical core (ds.continuity_evaluation.v0.1).
+
+    ``reason_code`` is OPTIONAL. When present (carried over from the Step 2A
+    record for a committed-action boundary case), it is added to the signed core
+    so it is included in the JCS signing input. Clean PASS/FAIL receipts omit it
+    entirely (Option A: no noisy generic PASS/FAIL reason codes)."""
     if not _is_sha256(action_ref):
         raise ContinuityReceiptError("action_ref must be sha256:<64 hex>")
     if evaluation_state not in EVALUATION_STATES:
@@ -345,7 +351,7 @@ def build_continuity_evaluation_core(
         )
     if not isinstance(evaluated_at, str) or evaluated_at.strip() == "":
         raise ContinuityReceiptError("evaluated_at must be an RFC 3339 timestamp")
-    return {
+    core: dict[str, Any] = {
         "schema_id": SCHEMA_ID,
         "action_ref": action_ref,
         "evaluator_id": evaluator_id,
@@ -353,6 +359,14 @@ def build_continuity_evaluation_core(
         "policy_ref": policy_ref,
         "evaluated_at": evaluated_at,
     }
+    if reason_code is not None:
+        if not isinstance(reason_code, str) or not reason_code:
+            raise ContinuityReceiptError(
+                "reason_code, when present, must be a non-empty string"
+            )
+        # Included in the signed core -> part of JCS(signed_core) signing input.
+        core["reason_code"] = reason_code
+    return core
 
 
 def _signed_core(receipt: Mapping[str, Any]) -> dict[str, Any]:

@@ -1218,10 +1218,16 @@ def post_evaluate_deterministic(input: DeterministicEvaluateInput):
       * 200 — evaluated and stored (``stored: true`` for a new write,
         ``stored: false`` for an idempotent identical re-submission);
       * 404 — no committed Action Commitment for the action_ref;
-      * 422 — malformed action_ref, caller-submitted acceptance_spec / extra
-        field, no committed conditional-release profile / acceptance_spec, or a
-        bad committed spec shape;
-      * 409 — a different evaluation already exists for this action_ref."""
+      * 422 — malformed action_ref, or a caller-submitted acceptance_spec / extra
+        field (transport/invocation errors only);
+      * 409 — a different evaluation already exists for this action_ref.
+
+    Committed-action boundary cases (no committed conditional-release profile, no
+    committed acceptance_spec, or a malformed committed spec) are NOT 422s: they
+    produce a terminal INDETERMINATE Step 2A record with a stable ``reason_code``
+    (MISSING_CONDITIONAL_RELEASE_PROFILE / MISSING_ACCEPTANCE_SPEC /
+    INVALID_ACCEPTANCE_SPEC), ``checks: []`` and ``declared_release_intent:
+    manual_review``, so a Step 2B signed receipt can still be issued."""
     action_ref = input.action_ref
     if not evaluation_store.is_valid_action_ref(action_ref):
         raise HTTPException(status_code=422, detail="invalid action_ref format")
@@ -1230,43 +1236,62 @@ def post_evaluate_deterministic(input: DeterministicEvaluateInput):
     if commitment is None:
         raise HTTPException(status_code=404, detail="action commitment not found")
 
+    # Distinguish transport/invocation errors (4xx, no record) from evaluator
+    # conclusions over a COMMITTED action. A committed action whose conditional-
+    # release profile or acceptance_spec is missing/malformed is NOT a transport
+    # error: absence here is itself an audit conclusion, so it becomes a terminal
+    # INDETERMINATE Step 2A evaluation artifact carrying a stable reason_code —
+    # never a bare 422. (Caller-submitted spec / extra fields and malformed
+    # action_ref remain transport errors handled above and by the input model.)
     profile = commitment_store.extract_conditional_release_profile(commitment)
+    acceptance_spec = profile.get("acceptance_spec") if isinstance(profile, dict) else None
+
+    reason_code = None
+    outcome = None
+    release_policy = None
     if profile is None:
-        raise HTTPException(
-            status_code=422,
-            detail="committed action has no conditional-release profile to evaluate",
-        )
-    acceptance_spec = profile.get("acceptance_spec")
-    if not isinstance(acceptance_spec, dict):
-        raise HTTPException(
-            status_code=422,
-            detail="committed conditional-release profile has no acceptance_spec",
-        )
+        reason_code = "MISSING_CONDITIONAL_RELEASE_PROFILE"
+    elif not isinstance(acceptance_spec, dict):
+        reason_code = "MISSING_ACCEPTANCE_SPEC"
+    else:
+        release_policy = profile.get("release_policy")
+        try:
+            outcome = det_evaluator.evaluate_acceptance_spec(
+                acceptance_spec, input.submitted_output
+            )
+        except DeterministicEvaluationError:
+            # Committed spec exists but is malformed / invalid shape — a terminal
+            # evaluator boundary case, not a transport error.
+            reason_code = "INVALID_ACCEPTANCE_SPEC"
 
-    try:
-        outcome = det_evaluator.evaluate_acceptance_spec(
-            acceptance_spec, input.submitted_output
-        )
-    except DeterministicEvaluationError as exc:
-        raise HTTPException(status_code=422, detail=str(exc))
+    if reason_code is not None:
+        # Terminal INDETERMINATE artifact for a committed-action boundary case.
+        result = det_evaluator.RESULT_INDETERMINATE
+        checks: list = []
+    else:
+        result = outcome["result"]
+        checks = outcome["checks"]
 
-    release_policy = profile.get("release_policy")
     declared_release_intent = det_evaluator.derive_declared_release_intent(
-        outcome["result"], release_policy if isinstance(release_policy, dict) else None
+        result, release_policy if isinstance(release_policy, dict) else None
     )
 
     record = {
         "record_type": evaluation_store.RECORD_TYPE,
         "record_version": evaluation_store.RECORD_VERSION,
         "action_ref": action_ref,
-        "spec_id": acceptance_spec.get("spec_id"),
+        "spec_id": acceptance_spec.get("spec_id") if isinstance(acceptance_spec, dict) else None,
         "evaluator_type": "deterministic",
-        "result": outcome["result"],
-        "checks": outcome["checks"],
+        "result": result,
+        "checks": checks,
         "declared_release_intent": declared_release_intent,
         "submitted_output": input.submitted_output,
         "bounded_claim": _DETERMINISTIC_EVALUATION_BOUNDED_CLAIM,
     }
+    # Option A: include reason_code only when it adds audit meaning (the
+    # committed-action boundary cases). Clean PASS/FAIL records omit it.
+    if reason_code is not None:
+        record["reason_code"] = reason_code
 
     try:
         wrote = evaluation_store.store_deterministic_evaluation(record)
@@ -1275,7 +1300,7 @@ def post_evaluate_deterministic(input: DeterministicEvaluateInput):
     except DeterministicEvaluationRecordError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
 
-    return {
+    response = {
         "status": "evaluated",
         "stored": wrote,
         "action_ref": action_ref,
@@ -1284,6 +1309,9 @@ def post_evaluate_deterministic(input: DeterministicEvaluateInput):
         "evaluation_lookup_path": f"/v1/evaluate/deterministic/{quote(action_ref, safe='')}",
         "record": record,
     }
+    if reason_code is not None:
+        response["reason_code"] = reason_code
+    return response
 
 
 @app.get("/v1/evaluate/deterministic/{action_ref}")
@@ -1372,12 +1400,16 @@ def post_continuity_evaluation_receipt(action_ref: str):
     except ContinuityReceiptConfigError as exc:
         raise HTTPException(status_code=503, detail=str(exc))
 
+    # Carry the Step 2A reason_code (when present) into the SIGNED core so it is
+    # part of the JCS signing input — not merely an unsigned annotation.
+    step2a_reason_code = record.get("reason_code")
     core = continuity_receipts.build_continuity_evaluation_core(
         action_ref=action_ref,
         evaluation_state=record["result"],
         evaluator_id=config.evaluator_id,
         policy_ref=config.policy_ref,
         evaluated_at=continuity_receipts._now_iso_utc(),
+        reason_code=step2a_reason_code if isinstance(step2a_reason_code, str) else None,
     )
     receipt = continuity_receipts.sign_continuity_evaluation_receipt(core, config)
 

@@ -220,11 +220,86 @@ def test_caller_submitted_acceptance_spec_is_refused(isolated_ledgers):
         )
 
 
-def test_commitment_without_profile_returns_422(isolated_ledgers):
+def test_commitment_without_profile_is_terminal_indeterminate(isolated_ledgers):
+    # A committed action with no conditional-release profile is NOT a transport
+    # error: absence is an audit conclusion -> terminal INDETERMINATE artifact.
     ref = _commit("noprofile", with_profile=False)
-    with pytest.raises(HTTPException) as exc:
-        _post(ref, _PASS_OUTPUT)
-    assert exc.value.status_code == 422
+    resp = _post(ref, _PASS_OUTPUT)
+    assert resp["result"] == "INDETERMINATE"
+    assert resp["reason_code"] == "MISSING_CONDITIONAL_RELEASE_PROFILE"
+    assert resp["declared_release_intent"] == "manual_review"
+    record = resp["record"]
+    assert record["checks"] == []
+    assert record["reason_code"] == "MISSING_CONDITIONAL_RELEASE_PROFILE"
+    # Stored + retrievable.
+    got = svc.get_evaluate_deterministic(ref)
+    assert got["record"]["reason_code"] == "MISSING_CONDITIONAL_RELEASE_PROFILE"
+
+
+def _commit_profile_variant(tag: str, profile: dict) -> str:
+    """Commit an action whose ds_conditional_release profile is `profile`."""
+    request_body = {"resource": f"urn:example:{tag}", "ds_conditional_release": profile}
+    arc = {
+        "schema_id": acstore.ACTION_REQUEST_SCHEMA_ID,
+        "method": "POST",
+        "target": {"path": "/deliver"},
+        "content_type": "application/json",
+        "body_digest": acstore._sha256(request_body),
+    }
+    ac = {
+        "schema_id": acstore.ACTION_COMMITMENT_SCHEMA_ID,
+        "agent_id": f"agent:{tag}",
+        "action_type": "sar402.resource_delivery",
+        "request_digest": acstore._sha256(arc),
+        "idempotency_key": f"idem-{tag}",
+    }
+    action_ref = acstore._sha256(ac)
+    acstore.store_action_commitment({
+        "record_type": acstore.RECORD_TYPE,
+        "record_version": acstore.RECORD_VERSION,
+        "request_body": request_body,
+        "action_request_commitment": arc,
+        "action_commitment": ac,
+        "action_ref": action_ref,
+    })
+    return action_ref
+
+
+def test_profile_missing_acceptance_spec_is_terminal_indeterminate(isolated_ledgers):
+    ref = _commit_profile_variant(
+        "noaspec",
+        {"profile_schema_id": "ds.conditional_release_profile.v0.1", "release_policy": _RELEASE_POLICY},
+    )
+    resp = _post(ref, _PASS_OUTPUT)
+    assert resp["result"] == "INDETERMINATE"
+    assert resp["reason_code"] == "MISSING_ACCEPTANCE_SPEC"
+    assert resp["declared_release_intent"] == "manual_review"
+    assert resp["record"]["checks"] == []
+
+
+def test_malformed_acceptance_spec_is_terminal_indeterminate(isolated_ledgers):
+    # acceptance_spec present but invalid shape (checks not an array).
+    ref = _commit_profile_variant(
+        "badaspec",
+        {
+            "profile_schema_id": "ds.conditional_release_profile.v0.1",
+            "acceptance_spec": {"spec_id": "bad", "checks": "not-an-array"},
+            "release_policy": _RELEASE_POLICY,
+        },
+    )
+    resp = _post(ref, _PASS_OUTPUT)
+    assert resp["result"] == "INDETERMINATE"
+    assert resp["reason_code"] == "INVALID_ACCEPTANCE_SPEC"
+    assert resp["declared_release_intent"] == "manual_review"
+    assert resp["record"]["checks"] == []
+
+
+def test_clean_pass_has_no_reason_code_noise(isolated_ledgers):
+    ref = _commit("cleanpass")
+    resp = _post(ref, _PASS_OUTPUT)
+    assert resp["result"] == "PASS"
+    assert "reason_code" not in resp
+    assert "reason_code" not in resp["record"]
 
 
 def test_store_and_get_route_roundtrip(isolated_ledgers):

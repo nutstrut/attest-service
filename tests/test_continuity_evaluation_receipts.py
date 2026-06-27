@@ -116,6 +116,128 @@ def _commit_and_evaluate(tag: str = "x") -> str:
     return action_ref
 
 
+def _commit_profile_variant(profile: dict, tag: str) -> str:
+    """Commit an action with an arbitrary ds_conditional_release profile, then run Step 2A."""
+    request_body = {"resource": f"urn:example:{tag}", "ds_conditional_release": profile}
+    arc = {
+        "schema_id": acstore.ACTION_REQUEST_SCHEMA_ID,
+        "method": "POST",
+        "target": {"path": "/deliver"},
+        "content_type": "application/json",
+        "body_digest": acstore._sha256(request_body),
+    }
+    ac = {
+        "schema_id": acstore.ACTION_COMMITMENT_SCHEMA_ID,
+        "agent_id": f"agent:{tag}",
+        "action_type": "sar402.resource_delivery",
+        "request_digest": acstore._sha256(arc),
+        "idempotency_key": f"idem-{tag}",
+    }
+    action_ref = acstore._sha256(ac)
+    acstore.store_action_commitment({
+        "record_type": acstore.RECORD_TYPE,
+        "record_version": acstore.RECORD_VERSION,
+        "request_body": request_body,
+        "action_request_commitment": arc,
+        "action_commitment": ac,
+        "action_ref": action_ref,
+    })
+    svc.post_evaluate_deterministic(
+        svc.DeterministicEvaluateInput(action_ref=action_ref, submitted_output=_PASS_OUTPUT)
+    )
+    return action_ref
+
+
+# ---------------------------------------------------------------------------
+# reason_code: terminal INDETERMINATE committed-action boundary cases
+# ---------------------------------------------------------------------------
+
+import pytest as _pytest
+
+
+@_pytest.mark.parametrize(
+    "profile,reason_code",
+    [
+        (None, "MISSING_CONDITIONAL_RELEASE_PROFILE"),
+        (
+            {"profile_schema_id": "ds.conditional_release_profile.v0.1", "release_policy": _RELEASE_POLICY},
+            "MISSING_ACCEPTANCE_SPEC",
+        ),
+        (
+            {
+                "profile_schema_id": "ds.conditional_release_profile.v0.1",
+                "acceptance_spec": {"spec_id": "bad", "checks": "not-an-array"},
+                "release_policy": _RELEASE_POLICY,
+            },
+            "INVALID_ACCEPTANCE_SPEC",
+        ),
+    ],
+)
+def test_indeterminate_receipt_includes_signed_reason_code(isolated, profile, reason_code):
+    if profile is None:
+        # Commit WITHOUT any ds_conditional_release profile.
+        request_body = {"resource": "urn:example:noprofile"}
+        arc = {
+            "schema_id": acstore.ACTION_REQUEST_SCHEMA_ID,
+            "method": "POST",
+            "target": {"path": "/deliver"},
+            "content_type": "application/json",
+            "body_digest": acstore._sha256(request_body),
+        }
+        ac = {
+            "schema_id": acstore.ACTION_COMMITMENT_SCHEMA_ID,
+            "agent_id": "agent:noprofile",
+            "action_type": "sar402.resource_delivery",
+            "request_digest": acstore._sha256(arc),
+            "idempotency_key": "idem-noprofile",
+        }
+        action_ref = acstore._sha256(ac)
+        acstore.store_action_commitment({
+            "record_type": acstore.RECORD_TYPE,
+            "record_version": acstore.RECORD_VERSION,
+            "request_body": request_body,
+            "action_request_commitment": arc,
+            "action_commitment": ac,
+            "action_ref": action_ref,
+        })
+        svc.post_evaluate_deterministic(
+            svc.DeterministicEvaluateInput(action_ref=action_ref, submitted_output=_PASS_OUTPUT)
+        )
+    else:
+        action_ref = _commit_profile_variant(profile, reason_code.lower())
+
+    # Step 2A record is a terminal INDETERMINATE artifact carrying reason_code.
+    step2a = estore.get_deterministic_evaluation(action_ref)
+    assert step2a["result"] == "INDETERMINATE"
+    assert step2a["reason_code"] == reason_code
+    assert step2a["checks"] == []
+    assert step2a["declared_release_intent"] == "manual_review"
+
+    # Step 2B signs a receipt with the same reason_code inside the signed core.
+    receipt = svc.post_continuity_evaluation_receipt(action_ref)["receipt"]
+    assert receipt["evaluation_state"] == "INDETERMINATE"
+    assert receipt["reason_code"] == reason_code
+
+    # reason_code is inside the JCS signing input (signed core), not just an annotation.
+    signing_input = crmod.canonical_signing_input(receipt)
+    assert b"reason_code" in signing_input
+    # Verification passes as issued; tampering with reason_code breaks it.
+    pub = _expected_pub_b64()
+    crmod.verify_continuity_evaluation_receipt(receipt, pub)
+    tampered = copy.deepcopy(receipt)
+    tampered["reason_code"] = "SOMETHING_ELSE"
+    with _pytest.raises(crmod.ContinuityReceiptVerificationError):
+        crmod.verify_continuity_evaluation_receipt(tampered, pub)
+
+
+def test_clean_pass_receipt_has_no_reason_code(isolated):
+    action_ref = _commit_and_evaluate()
+    receipt = svc.post_continuity_evaluation_receipt(action_ref)["receipt"]
+    assert receipt["evaluation_state"] == "PASS"
+    assert "reason_code" not in receipt
+    assert b"reason_code" not in crmod.canonical_signing_input(receipt)
+
+
 # ---------------------------------------------------------------------------
 # Shape + signature binding
 # ---------------------------------------------------------------------------

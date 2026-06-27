@@ -133,6 +133,16 @@ def validate_deterministic_evaluation_record(record: Mapping[str, Any]) -> str:
             "declared_release_intent must be a non-empty string"
         )
 
+    # ``reason_code`` is OPTIONAL (Option A): present only when it adds audit
+    # meaning (e.g. a committed-action boundary case routed to INDETERMINATE).
+    # When present it MUST be a non-empty string; clean PASS/FAIL records omit it.
+    if "reason_code" in record:
+        reason_code = record.get("reason_code")
+        if not isinstance(reason_code, str) or not reason_code:
+            raise DeterministicEvaluationRecordError(
+                "reason_code, when present, must be a non-empty string"
+            )
+
     # An unsigned record MUST NOT masquerade as signed in Step 2A.
     for forbidden in ("signature", "kid", "key_id"):
         if forbidden in record:
