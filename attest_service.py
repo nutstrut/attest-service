@@ -114,6 +114,20 @@ from deterministic_evaluation_store import (  # noqa: E402
     DeterministicEvaluationRecordError,
 )
 
+# Hosted Path C, Step 2B: SIGNED Continuity Evaluation Receipt issuance over an
+# already-stored UNSIGNED Step 2A record. Signs with the configured evaluator's
+# Ed25519 key (ds.continuity_evaluation.v0.1). Fails safely when key material is
+# missing — it never emits an unsigned/partial receipt. It does NOT alter the
+# Step 2A record and claims no release / payment / execution / correctness /
+# legal finality.
+import continuity_evaluation_receipts as continuity_receipts  # noqa: E402
+from continuity_evaluation_receipts import (  # noqa: E402
+    ContinuityReceiptConfigError,
+    ContinuityReceiptConflict,
+    ContinuityReceiptError,
+    ContinuityReceiptVerificationError,
+)
+
 
 def _recording_public_key():
     """Return the recording-attribution VERIFICATION (public) key, or None.
@@ -1295,6 +1309,130 @@ def get_evaluate_deterministic(action_ref: str):
         "declared_release_intent": record.get("declared_release_intent"),
         "record": record,
         "evaluation_lookup_path": f"/v1/evaluate/deterministic/{quote(action_ref, safe='')}",
+    }
+
+
+def _continuity_receipt_lookup_path(action_ref: str) -> str:
+    return (
+        f"/v1/evaluate/deterministic/{quote(action_ref, safe='')}/continuity-receipt"
+    )
+
+
+@app.post("/v1/evaluate/deterministic/{action_ref}/continuity-receipt")
+def post_continuity_evaluation_receipt(action_ref: str):
+    """Hosted Path C, Step 2B: issue a SIGNED Continuity Evaluation Receipt.
+
+    Takes the already-stored UNSIGNED Step 2A deterministic evaluation record for
+    ``action_ref`` and signs a Continuity Evaluation Receipt
+    (ds.continuity_evaluation.v0.1) over its evaluation state. The Step 2A record
+    is NOT modified, NOT re-evaluated, and remains unsigned. No caller-submitted
+    fields are accepted (the route body is empty); ``evaluator_id`` /
+    ``policy_ref`` come from config and ``evaluated_at`` is generated fresh at
+    signing time (never derived from the Step 2A record).
+
+    Bounded claim: the signed receipt proves only that the named evaluator signed
+    the pre-execution evaluation state for the committed action_ref under the
+    stated policy_ref. It does NOT prove actual release, payment / resource-
+    release finality, execution, objective correctness, or legal sufficiency.
+
+    Status codes:
+      * 200 — signed receipt issued (``stored: true`` new, ``stored: false``
+        idempotent re-issue of the identical existing receipt);
+      * 404 — no Step 2A deterministic evaluation record for the action_ref;
+      * 409 — a different signed receipt already exists for this action_ref;
+      * 422 — malformed action_ref;
+      * 503 — signing key/config missing or invalid (fails safely, no receipt)."""
+    if not continuity_receipts.is_valid_action_ref(action_ref):
+        raise HTTPException(status_code=422, detail="invalid action_ref format")
+
+    record = evaluation_store.get_deterministic_evaluation(action_ref)
+    if record is None:
+        raise HTTPException(
+            status_code=404,
+            detail="deterministic evaluation not found; Step 2A record is required "
+            "before a Continuity Evaluation Receipt can be issued",
+        )
+
+    # Idempotency: if a signed receipt already exists, return it as a no-op.
+    existing = continuity_receipts.get_continuity_evaluation_receipt(action_ref)
+    if existing is not None:
+        return {
+            "status": "continuity_receipt_issued",
+            "stored": False,
+            "action_ref": action_ref,
+            "receipt": existing,
+            "receipt_lookup_path": _continuity_receipt_lookup_path(action_ref),
+            "bounded_claim": continuity_receipts.BOUNDED_CLAIM,
+        }
+
+    # Fail SAFELY if signing key/config is missing — never emit an unsigned/
+    # partial receipt.
+    try:
+        config = continuity_receipts.EvaluatorSigningConfig.from_env()
+    except ContinuityReceiptConfigError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+    core = continuity_receipts.build_continuity_evaluation_core(
+        action_ref=action_ref,
+        evaluation_state=record["result"],
+        evaluator_id=config.evaluator_id,
+        policy_ref=config.policy_ref,
+        evaluated_at=continuity_receipts._now_iso_utc(),
+    )
+    receipt = continuity_receipts.sign_continuity_evaluation_receipt(core, config)
+
+    # Self-verify before storing: a receipt we cannot verify is never persisted.
+    try:
+        continuity_receipts.verify_continuity_evaluation_receipt(
+            receipt, config.public_key_b64
+        )
+    except ContinuityReceiptVerificationError as exc:  # pragma: no cover - defensive
+        raise HTTPException(
+            status_code=500,
+            detail=f"self-verification failed, refusing to store: {exc}",
+        )
+
+    try:
+        wrote = continuity_receipts.store_continuity_evaluation_receipt(receipt)
+    except ContinuityReceiptConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except ContinuityReceiptError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    return {
+        "status": "continuity_receipt_issued",
+        "stored": wrote,
+        "action_ref": action_ref,
+        "receipt": receipt,
+        "receipt_lookup_path": _continuity_receipt_lookup_path(action_ref),
+        "bounded_claim": continuity_receipts.BOUNDED_CLAIM,
+    }
+
+
+@app.get("/v1/evaluate/deterministic/{action_ref}/continuity-receipt")
+def get_continuity_evaluation_receipt(action_ref: str):
+    """Hosted Path C, Step 2B: return the stored SIGNED Continuity Evaluation Receipt.
+
+    Public, read-only. Does NOT sign and does NOT auto-issue a receipt on GET.
+
+    Status codes:
+      * 200 — signed receipt found;
+      * 404 — no signed receipt for the action_ref;
+      * 422 — malformed action_ref."""
+    if not continuity_receipts.is_valid_action_ref(action_ref):
+        raise HTTPException(status_code=422, detail="invalid action_ref format")
+
+    receipt = continuity_receipts.get_continuity_evaluation_receipt(action_ref)
+    if receipt is None:
+        raise HTTPException(
+            status_code=404, detail="continuity evaluation receipt not found"
+        )
+
+    return {
+        "action_ref": action_ref,
+        "receipt": receipt,
+        "receipt_lookup_path": _continuity_receipt_lookup_path(action_ref),
+        "bounded_claim": continuity_receipts.BOUNDED_CLAIM,
     }
 
 
