@@ -1047,6 +1047,32 @@ def get_chain(chain_id: str):
     return chain_response(chain_id)
 
 
+@app.get("/v1/attest/chain/{chain_id}/correlation")
+def get_chain_correlation(chain_id: str):
+    """Evidence Graph Phase 2: read-only chain correlation view.
+
+    Thin delegate to ``chain_correlation.build_correlation`` — it holds NO
+    correlation logic of its own (single source of truth). Returns the
+    ``ds.chain_correlation.v0.1`` view correlating Continuity receipt -> SAR
+    receipt -> chain_id -> verdict, plus Path B recording-wrapper status. It does
+    NOT verify verdicts, infer verdicts, mutate ledgers, or assert delivery /
+    release / settlement.
+
+    Status codes:
+      * 200 — a resolved correlation view (may report absent verdicts/wrapper);
+      * 404 — no chain record for the chain_id;
+      * 422 — malformed chain_id."""
+    import chain_correlation  # lazy: avoids import cycle at load time
+
+    try:
+        view = chain_correlation.build_correlation(chain_id=chain_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    if view.get("status") != chain_correlation.STATUS_RESOLVED:
+        raise HTTPException(status_code=404, detail="chain not found")
+    return view
+
+
 @app.get("/v1/attest/receipt/{receipt_id}")
 def get_receipt(receipt_id: str):
     receipt = find_receipt(receipt_id)
