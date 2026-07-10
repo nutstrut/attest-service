@@ -8,10 +8,12 @@ artifact is exercised exactly once, outside of this test suite, in the
 bounded custody proof
 (``reports/external-actions/sar-402-path-b-final-loader-custody-proof-*``).
 
-The script is invoked as a real subprocess (not sourced/mocked) against a
-temporary directory standing in for systemd's $CREDENTIALS_DIRECTORY, so
-these tests exercise the actual gpg/tar/openssl pipeline the deployed
-ExecStartPre step would run.
+The script is invoked as a real subprocess (not sourced/mocked) against
+temporary directories standing in for systemd's read-only
+$CREDENTIALS_DIRECTORY (LoadCredential= inputs) and writable
+$RUNTIME_DIRECTORY (RuntimeDirectory= scratch/output space), so these tests
+exercise the actual gpg/tar/openssl pipeline the deployed ExecStartPre step
+would run.
 
 Covers:
   * successful unlock: correct kid, correct passphrase, matching public key
@@ -117,11 +119,20 @@ def fixture_key() -> Ed25519PrivateKey:
     return Ed25519PrivateKey.generate()
 
 
+def _runtime_dir(creds_dir: Path) -> Path:
+    """Mirrors the drop-in's separate, writable RuntimeDirectory=, distinct
+    from the read-only $CREDENTIALS_DIRECTORY that LoadCredential= populates."""
+    return creds_dir.parent / (creds_dir.name + "-runtime")
+
+
 def _run_unlock(creds_dir: Path, *, configured_kid: str = EXPECTED_KID,
                  expected_kid: str = EXPECTED_KID,
                  expected_pub: str = EXPECTED_PUBLIC_KEY_HEX):
+    runtime_dir = _runtime_dir(creds_dir)
+    runtime_dir.mkdir(parents=True, exist_ok=True)
     env = dict(os.environ)
     env["CREDENTIALS_DIRECTORY"] = str(creds_dir)
+    env["RUNTIME_DIRECTORY"] = str(runtime_dir)
     env["PATH_B_RECORDING_KID"] = configured_kid
     env["PATHB_EXPECTED_KID"] = expected_kid
     env["PATHB_EXPECTED_PUBLIC_KEY_HEX"] = expected_pub
@@ -155,7 +166,7 @@ def test_valid_unlock_writes_expected_seed(tmp_path, fixture_key):
     )
 
     assert result.returncode == 0, result.stderr
-    out_file = creds / "path-b-recording-signing-key"
+    out_file = _runtime_dir(creds) / "path-b-recording-signing-key"
     assert out_file.exists()
     assert out_file.read_text() == _seed_hex(fixture_key)
     assert oct(out_file.stat().st_mode)[-3:] == "600"
@@ -179,7 +190,7 @@ def test_wrong_configured_kid_fails_closed_before_decrypt(tmp_path, fixture_key)
 
     assert result.returncode != 0
     assert "kid" in result.stderr
-    assert not (creds / "path-b-recording-signing-key").exists()
+    assert not (_runtime_dir(creds) / "path-b-recording-signing-key").exists()
 
 
 def test_missing_configured_kid_fails_closed(tmp_path, fixture_key):
@@ -191,7 +202,7 @@ def test_missing_configured_kid_fails_closed(tmp_path, fixture_key):
     result = _run_unlock(creds, configured_kid="", expected_pub=_pub_hex(fixture_key))
 
     assert result.returncode != 0
-    assert not (creds / "path-b-recording-signing-key").exists()
+    assert not (_runtime_dir(creds) / "path-b-recording-signing-key").exists()
 
 
 # ---------------------------------------------------------------------------
@@ -209,7 +220,7 @@ def test_wrong_public_key_fails_closed(tmp_path, fixture_key):
 
     assert result.returncode != 0
     assert "public key" in result.stderr
-    assert not (creds / "path-b-recording-signing-key").exists()
+    assert not (_runtime_dir(creds) / "path-b-recording-signing-key").exists()
 
 
 # ---------------------------------------------------------------------------
@@ -226,7 +237,7 @@ def test_missing_sealed_credential_fails_closed(tmp_path, fixture_key):
 
     assert result.returncode != 0
     assert "sealed credential" in result.stderr
-    assert not (creds / "path-b-recording-signing-key").exists()
+    assert not (_runtime_dir(creds) / "path-b-recording-signing-key").exists()
 
 
 def test_missing_passphrase_credential_fails_closed(tmp_path, fixture_key):
@@ -240,7 +251,7 @@ def test_missing_passphrase_credential_fails_closed(tmp_path, fixture_key):
 
     assert result.returncode != 0
     assert "passphrase credential" in result.stderr
-    assert not (creds / "path-b-recording-signing-key").exists()
+    assert not (_runtime_dir(creds) / "path-b-recording-signing-key").exists()
 
 
 def test_wrong_passphrase_fails_closed(tmp_path, fixture_key):
@@ -251,7 +262,7 @@ def test_wrong_passphrase_fails_closed(tmp_path, fixture_key):
     result = _run_unlock(creds, expected_pub=_pub_hex(fixture_key))
 
     assert result.returncode != 0
-    assert not (creds / "path-b-recording-signing-key").exists()
+    assert not (_runtime_dir(creds) / "path-b-recording-signing-key").exists()
 
 
 # ---------------------------------------------------------------------------
@@ -270,7 +281,7 @@ def test_malformed_archive_missing_seed_hex_fails_closed(tmp_path, fixture_key):
 
     assert result.returncode != 0
     assert "seed.hex missing" in result.stderr
-    assert not (creds / "path-b-recording-signing-key").exists()
+    assert not (_runtime_dir(creds) / "path-b-recording-signing-key").exists()
 
 
 def test_malformed_archive_missing_seed_pem_fails_closed(tmp_path, fixture_key):
@@ -285,7 +296,7 @@ def test_malformed_archive_missing_seed_pem_fails_closed(tmp_path, fixture_key):
 
     assert result.returncode != 0
     assert "seed.pem missing" in result.stderr
-    assert not (creds / "path-b-recording-signing-key").exists()
+    assert not (_runtime_dir(creds) / "path-b-recording-signing-key").exists()
 
 
 def test_malformed_seed_hex_shape_fails_closed(tmp_path, fixture_key):
@@ -300,7 +311,7 @@ def test_malformed_seed_hex_shape_fails_closed(tmp_path, fixture_key):
 
     assert result.returncode != 0
     assert "seed.hex is not 64 lowercase hex" in result.stderr
-    assert not (creds / "path-b-recording-signing-key").exists()
+    assert not (_runtime_dir(creds) / "path-b-recording-signing-key").exists()
 
 
 # ---------------------------------------------------------------------------
@@ -367,5 +378,8 @@ def test_ephemeral_working_directory_not_left_behind(tmp_path, fixture_key):
 
     _run_unlock(creds, expected_pub=_pub_hex(fixture_key))
 
-    leftovers = [p for p in creds.iterdir() if p.name.startswith("pathb-unlock.")]
+    leftovers = [
+        p for p in _runtime_dir(creds).iterdir()
+        if p.name.startswith("pathb-unlock.")
+    ]
     assert leftovers == []

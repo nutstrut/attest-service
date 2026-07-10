@@ -6,21 +6,27 @@
 #
 # Intended to run as the attest-service.service ExecStartPre step, invoked by
 # systemd with $CREDENTIALS_DIRECTORY already populated via LoadCredential=
+# and $RUNTIME_DIRECTORY already created via RuntimeDirectory=
 # (see ../systemd/pathb-credential.conf). NOT installed by adding this file
 # to the repo — deployment is a separate, later step.
 #
 # Reads the sealed artifact and its passphrase ONLY from
 # $CREDENTIALS_DIRECTORY (never directly from /root/... — that indirection is
-# systemd's LoadCredential=, not this script), decrypts once, validates the
-# derived public key against the expected value, and writes ONLY the 32-byte
-# Ed25519 seed (64 lowercase hex chars) to
-# $CREDENTIALS_DIRECTORY/path-b-recording-signing-key — the exact filename
-# sar402_pathb_credential.py's resolve_private_key_path() already looks for.
+# systemd's LoadCredential=, not this script). $CREDENTIALS_DIRECTORY is
+# mounted read-only by systemd, so it cannot hold this script's own output —
+# decryption work and the final decrypted seed both live under
+# $RUNTIME_DIRECTORY instead (a separate, writable, tmpfs-backed directory
+# systemd creates via RuntimeDirectory=, torn down when the unit stops).
+# The final seed is written to
+# $RUNTIME_DIRECTORY/path-b-recording-signing-key, which the drop-in also
+# exports as PATH_B_RECORDING_PRIVATE_KEY_FILE (an explicit, non-secret path
+# override) so sar402_pathb_credential.py's resolve_private_key_path() reads
+# it directly rather than assuming $CREDENTIALS_DIRECTORY holds the output.
 #
 # Fails closed on every precondition: missing credential, wrong configured
 # kid, malformed archive, wrong/missing seed material, or derived public key
 # mismatch. Never echoes the passphrase, the seed, or any substring of
-# either to stdout/stderr, a log, or a file outside $CREDENTIALS_DIRECTORY.
+# either to stdout/stderr, a log, or a file outside $RUNTIME_DIRECTORY.
 
 set -euo pipefail
 
@@ -37,10 +43,12 @@ fail() {
 
 [[ -n "${CREDENTIALS_DIRECTORY:-}" ]] || fail "CREDENTIALS_DIRECTORY is not set — refusing to proceed"
 [[ -d "$CREDENTIALS_DIRECTORY" ]] || fail "CREDENTIALS_DIRECTORY does not exist — refusing to proceed"
+[[ -n "${RUNTIME_DIRECTORY:-}" ]] || fail "RUNTIME_DIRECTORY is not set — refusing to proceed"
+[[ -d "$RUNTIME_DIRECTORY" ]] || fail "RUNTIME_DIRECTORY does not exist — refusing to proceed"
 
 sealed="$CREDENTIALS_DIRECTORY/path-b-recording-key-sealed"
 passphrase_file="$CREDENTIALS_DIRECTORY/path-b-recording-passphrase"
-out="$CREDENTIALS_DIRECTORY/path-b-recording-signing-key"
+out="$RUNTIME_DIRECTORY/path-b-recording-signing-key"
 
 # Configured kid must be supplied (e.g. by a dedicated, non-secret env file
 # read into PATH_B_RECORDING_KID) and must equal the identity this script's
@@ -55,7 +63,7 @@ configured_kid="${PATH_B_RECORDING_KID:-}"
 [[ -r "$sealed" ]] || fail "sealed credential not found or unreadable — refusing to proceed"
 [[ -r "$passphrase_file" ]] || fail "passphrase credential not found or unreadable — refusing to proceed"
 
-work="$(mktemp -d "$CREDENTIALS_DIRECTORY/pathb-unlock.XXXXXX")"
+work="$(mktemp -d "$RUNTIME_DIRECTORY/pathb-unlock.XXXXXX")"
 cleanup() {
     # Best-effort shred of every extracted file before removing the
     # directory; never fails the overall exit code on shred/rm errors.
