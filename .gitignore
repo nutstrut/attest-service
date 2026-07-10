@@ -14,3 +14,7 @@ trustscore_cache.lock
 
 # SAR-402 controlled demo generated runs (evidence + receipts)
 reports/sar402-demo/runs/
+
+# SAR-402 Path B local development credentials — never committed
+.local-credentials/
+dev/path-b-local/.env.local
