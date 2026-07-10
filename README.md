@@ -12,6 +12,13 @@ verification, and stores public evidence records for Explorer v1.
 Part of the DefaultVerifier infrastructure alongside settlement-witness and
 continuity-analyzer.
 
+`sar_input.agent_id` is the accountable subject that receives TrustScore
+attribution; it is distinct from `sar_input.executor_id` (who actually
+performed delegated work). See settlement-witness's
+`docs/receipt-identity-model.md` for the full identity model. attest-service
+forwards both fields to settlement-witness unchanged and records them
+alongside its own chain ledger (`write_chain`) for audit purposes only.
+
 Public surfaces:
 
 - Start: https://defaultverifier.com/start

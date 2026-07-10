@@ -512,7 +512,12 @@ def write_chain(
     verdict_correlation: str | None = None,
     predicate_status_vector: dict[str, Any] | list[Any] | None = None,
     external_provenance: dict[str, Any] | None = None,
+    executor_id: str | None = None,
+    execution_mode: str | None = None,
 ) -> dict[str, Any]:
+    # agent_id is the accountable subject (TrustScore attribution). executor_id
+    # / execution_mode are additive audit metadata about who actually performed
+    # delegated work; they are never used for TrustScore matching.
     record = {
         "chain_id": chain_id,
         "agent_id": agent_id,
@@ -530,6 +535,10 @@ def write_chain(
     }
     if external_provenance:
         record["external_provenance"] = external_provenance
+    if executor_id:
+        record["executor_id"] = executor_id
+    if execution_mode:
+        record["execution_mode"] = execution_mode
     append_jsonl(CHAIN_LEDGER, record)
     return record
 
@@ -924,6 +933,8 @@ def attest(input: SyncAttestInput):
         stage="chained",
         receipt_context=input.receipt_context,
         external_provenance=external_provenance,
+        executor_id=sar_payload.get("executor_id"),
+        execution_mode=sar_payload.get("execution_mode"),
     )
     if external_provenance:
         chain = {**chain, "external_provenance": external_provenance}
@@ -1020,6 +1031,8 @@ def complete(input: CompleteInput):
         stage="chained",
         receipt_context=receipt_context,
         external_provenance=external_provenance,
+        executor_id=sar_payload.get("executor_id"),
+        execution_mode=sar_payload.get("execution_mode"),
     )
     write_receipt(
         receipt=sar,
