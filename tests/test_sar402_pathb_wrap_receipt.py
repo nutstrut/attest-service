@@ -47,6 +47,10 @@ _TEST_SEED_HEX = _TEST_SIGNING_KEY.private_bytes(
     format=serialization.PrivateFormat.Raw,
     encryption_algorithm=serialization.NoEncryption(),
 ).hex()
+_TEST_PUBLIC_HEX = _TEST_SIGNING_KEY.public_key().public_bytes(
+    encoding=serialization.Encoding.Raw,
+    format=serialization.PublicFormat.Raw,
+).hex()
 PINNED_KID = script.EXPECTED_KID
 
 
@@ -65,12 +69,27 @@ def _write_path_a_record(ledger: Path, inner: dict) -> str:
     return receipt_id
 
 
-def _env_file(tmp_path: Path, *, seed_hex: str | None, kid: str | None) -> Path:
+def _env_file(
+    tmp_path: Path,
+    *,
+    seed_hex: str | None,
+    kid: str | None,
+    expected_pub_hex: str | None = _TEST_PUBLIC_HEX,
+) -> Path:
+    """Build a Path B credential-lane env file (PATH_B_RECORDING_* names).
+
+    ``seed_hex``, if given, is written to its own key file and referenced via
+    ``PATH_B_RECORDING_PRIVATE_KEY_FILE`` — the credential lane reads private
+    key material from a file, never a raw hex value in the env file itself."""
     lines = []
     if seed_hex is not None:
-        lines.append(f"SAR402_RECORDING_SIGNING_KEY_HEX={seed_hex}")
+        key_file = tmp_path / f"seed-{abs(hash((seed_hex, kid)))}.hex"
+        key_file.write_text(seed_hex + "\n", encoding="utf-8")
+        lines.append(f"PATH_B_RECORDING_PRIVATE_KEY_FILE={key_file}")
     if kid is not None:
-        lines.append(f"SAR402_RECORDING_KID={kid}")
+        lines.append(f"PATH_B_RECORDING_KID={kid}")
+    if expected_pub_hex is not None:
+        lines.append(f"PATH_B_RECORDING_PUBLIC_KEY_HEX={expected_pub_hex}")
     path = tmp_path / "recording.env"
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return path

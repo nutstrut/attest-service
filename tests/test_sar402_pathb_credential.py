@@ -15,8 +15,12 @@ Covers:
   * kid mismatch fails closed (coherence gate);
   * no secret value (seed hex or raw private bytes) ever appears in a raised
     exception's message;
-  * current -1 production behavior (``sar402_recording_wrapper.py`` /
-    ``scripts/sar402_pathb_wrap_receipt.py``) is untouched by this module.
+  * ``sar402_recording_wrapper.py``'s own env-var names stay a disjoint
+    namespace from this module's ``PATH_B_RECORDING_*`` names;
+  * as of the approved -1 -> -2 rotation
+    (``reports/approvals/sar-402-path-b-production-rotation-execution-decision-20260711.md``),
+    ``scripts/sar402_pathb_wrap_receipt.py`` is pinned to -2 and consumes
+    this module directly — see ``test_producer_pinned_to_kid_2_after_rotation``.
 """
 
 from __future__ import annotations
@@ -253,8 +257,10 @@ def test_fingerprint_never_returns_full_hex():
 # ---------------------------------------------------------------------------
 
 def test_legacy_producer_env_vars_are_a_disjoint_namespace():
-    """The dedicated PATH_B_* names must never collide with the live
-    SAR402_RECORDING_* names the -1 producer/verifier still read."""
+    """The dedicated PATH_B_* names must never collide with the legacy
+    SAR402_RECORDING_* names -- still read by the verifier's base (-1) key
+    lookup and by sar402_recording_wrapper.py's own helpers, even though the
+    producer script itself has migrated fully to PATH_B_RECORDING_*."""
     import sar402_recording_wrapper as legacy
 
     legacy_names = {
@@ -266,7 +272,11 @@ def test_legacy_producer_env_vars_are_a_disjoint_namespace():
     assert legacy_names.isdisjoint(dedicated_names)
 
 
-def test_legacy_producer_still_pinned_to_kid_1():
+def test_producer_pinned_to_kid_2_after_rotation():
+    """The producer script's pinned kid, as of the approved -1 -> -2
+    rotation (reports/approvals/sar-402-path-b-production-rotation-execution-decision-20260711.md).
+    This replaces the earlier invariant asserting -1 stayed pinned
+    (accurate before the rotation, intentionally no longer true)."""
     import attest_service as _svc  # noqa: F401  (bootstraps morpheus package path)
 
     scripts_dir = str(ROOT / "scripts")
@@ -274,4 +284,4 @@ def test_legacy_producer_still_pinned_to_kid_1():
         sys.path.insert(0, scripts_dir)
     import sar402_pathb_wrap_receipt as script
 
-    assert script.EXPECTED_KID == "defaultverifier-recording-ed25519-1"
+    assert script.EXPECTED_KID == "defaultverifier-recording-ed25519-2"

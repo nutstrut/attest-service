@@ -13,10 +13,22 @@ server; and never deploys. Path B remains "record-only" — the signature attest
 to DefaultVerifier's RECORDING act, not to delivery, payment, access, release,
 finality, or mainnet settlement (see the wrapper's ``authority_boundary``).
 
-Key material is read from the environment (or, with ``--env-file``, from exactly
-the three SAR-402 recording vars in that file). The active production kid is
-pinned: the script refuses any kid other than
-``defaultverifier-recording-ed25519-1``.
+Key material is read via the dedicated Path B credential lane
+(``sar402_pathb_credential.py``): ``PATH_B_RECORDING_PRIVATE_KEY_FILE``
+(explicit path to a decrypted seed — e.g. the live, already-unlocked
+``$RUNTIME_DIRECTORY/path-b-recording-signing-key`` from the running
+``attest-service.service`` wrapper) or ``$CREDENTIALS_DIRECTORY``,
+``PATH_B_RECORDING_KID``, and ``PATH_B_RECORDING_PUBLIC_KEY_HEX`` — never the
+legacy ``SAR402_RECORDING_*`` names, which this script no longer reads. The
+active production kid is pinned: the script refuses any kid other than
+``defaultverifier-recording-ed25519-2`` (rotated 2026-07-11 from
+``-1``, see
+``reports/approvals/sar-402-path-b-producer-verifier-rotation-decision-20260710.md``
+and
+``reports/approvals/sar-402-path-b-production-rotation-execution-decision-20260711.md``).
+It fails closed, with no fallback to any other key, on any credential-lane
+error (missing/malformed credential, kid mismatch, derived-public-key
+mismatch).
 """
 
 from __future__ import annotations
@@ -28,7 +40,8 @@ from pathlib import Path
 from typing import Any, Mapping, Optional
 
 from sar402_recording_store import store_recording_wrapper, RecordingWrapperConflict
-from sar402_recording_wrapper import build_recording_wrapper, load_signing_key, load_kid
+from sar402_recording_wrapper import build_recording_wrapper
+import sar402_pathb_credential as pathb_credential
 
 # Repo root is the parent of this scripts/ directory; the Path A receipt ledger
 # follows attest_service.py's convention (BASE_DIR / "<name>_master.jsonl").
@@ -38,13 +51,15 @@ RECEIPT_LEDGER = REPO_ROOT / "attest_receipts_master.jsonl"
 # The single active production recording kid (published at
 # https://defaultverifier.com/.well-known/sar-keys.json). Any other kid is
 # refused — this script does not mint or roll keys.
-EXPECTED_KID = "defaultverifier-recording-ed25519-1"
+EXPECTED_KID = "defaultverifier-recording-ed25519-2"
 
-# The three (and only three) env vars this script reads from an --env-file.
+# The three (and only three) env vars this script reads from an --env-file,
+# now the dedicated Path B credential-lane namespace (never the legacy,
+# shared SAR402_RECORDING_* names).
 ENV_KEYS = (
-    "SAR402_RECORDING_SIGNING_KEY_HEX",
-    "SAR402_RECORDING_PUBLIC_KEY_HEX",
-    "SAR402_RECORDING_KID",
+    pathb_credential.ENV_PRIVATE_KEY_FILE,
+    pathb_credential.ENV_PUBLIC_KEY_HEX,
+    pathb_credential.ENV_KID,
 )
 
 
@@ -53,7 +68,8 @@ class OperatorError(Exception):
 
 
 def parse_env_file(path: Path) -> dict[str, str]:
-    """Read ONLY the three SAR-402 recording vars from a shell-style env file.
+    """Read ONLY the three Path B credential-lane vars from a shell-style env
+    file.
 
     Lines look like ``KEY=value`` (optionally ``export KEY=value``), with ``#``
     comments and optional surrounding quotes. Any key not in ``ENV_KEYS`` is
@@ -155,27 +171,47 @@ def _print_metadata(meta: Mapping[str, Any]) -> None:
 
 
 def run(args: argparse.Namespace) -> int:
-    # 1. Resolve key material source.
+    # 1. Resolve key material source via the dedicated Path B credential lane
+    #    (never the legacy shared SAR402_RECORDING_* names).
     if args.env_file:
         env = parse_env_file(Path(args.env_file))
     else:
         import os
         env = {k: os.environ[k] for k in ENV_KEYS if k in os.environ}
+        # $CREDENTIALS_DIRECTORY, if present in the real environment, is a
+        # fallback resolution path the credential lane itself understands —
+        # pass it through unfiltered by ENV_KEYS since it is not a secret.
+        cred_dir = os.environ.get("CREDENTIALS_DIRECTORY")
+        if cred_dir:
+            env["CREDENTIALS_DIRECTORY"] = cred_dir
 
-    # 2. Refuse without a usable signing key (never echo it).
-    signing_key = load_signing_key(env)
-    if signing_key is None:
-        raise OperatorError(
-            "no SAR402_RECORDING_SIGNING_KEY_HEX available; refusing to proceed"
-        )
+    # 2. Load + validate through the credential lane. Fails closed, no
+    #    fallback to any other key, on any error (never echoes key material).
+    try:
+        signing_key, derived_pub_hex = pathb_credential.load_and_check(env)
+    except pathb_credential.PathBCredentialError as exc:
+        raise OperatorError(f"credential lane refused to load key material: {exc}")
 
-    # 3. Pin the production kid.
-    kid = load_kid(env)
-    if kid != EXPECTED_KID:
-        raise OperatorError(
-            f"SAR402_RECORDING_KID must be exactly {EXPECTED_KID!r}; "
-            f"got {kid!r} — refusing to proceed"
+    try:
+        configured_kid = pathb_credential.load_configured_kid(env)
+        expected_pub_hex = pathb_credential.load_expected_public_key_hex(env)
+    except pathb_credential.PathBCredentialError as exc:
+        raise OperatorError(f"credential lane configuration error: {exc}")
+
+    # 3. Coherence gate: configured kid must be exactly this script's pinned
+    #    production kid, and the derived public key must match what's
+    #    configured as expected — fail closed on any mismatch.
+    try:
+        pathb_credential.startup_coherence_gate(
+            configured_kid=configured_kid,
+            expected_public_key_hex=expected_pub_hex,
+            private_key=signing_key,
+            producer_supported_kids=(EXPECTED_KID,),
         )
+    except pathb_credential.PathBCredentialError as exc:
+        raise OperatorError(str(exc))
+
+    kid = configured_kid
 
     # 4. Locate the Path A receipt.
     receipt = find_inner_receipt(args.receipt_id, RECEIPT_LEDGER)
