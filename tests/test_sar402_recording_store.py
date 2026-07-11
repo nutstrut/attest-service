@@ -251,6 +251,85 @@ def test_endpoint_verification_failure_returns_clear_detail(isolated_store, monk
 
 
 # ---------------------------------------------------------------------------
+# Temporary verifier overlap (Path B kid rotation, -1 + -2 both trusted)
+# ---------------------------------------------------------------------------
+
+_OVERLAY_KEY = Ed25519PrivateKey.generate()
+
+
+def test_overlay_kid_wrapper_verifies_against_overlay_key(
+    isolated_store, verification_key, monkeypatch
+):
+    """A wrapper whose recording_key_id is the overlay kid verifies against
+    the configured overlay key, not the base (-1) key -- proving both keys
+    are trusted simultaneously, not one replacing the other."""
+    receipt = _inner_receipt("overlay-ok")
+    wrapper = build_recording_wrapper(
+        receipt,
+        signing_key=_OVERLAY_KEY,
+        kid=svc._RECORDING_OVERLAY_KID,
+    )
+    store_recording_wrapper(wrapper)
+    monkeypatch.setattr(
+        svc, "_recording_overlay_public_key", lambda: _OVERLAY_KEY.public_key()
+    )
+
+    resp = svc.get_sar402_recording(receipt["receipt_id"])
+    assert resp["wrapper"]["recording_key_id"] == svc._RECORDING_OVERLAY_KID
+
+
+def test_base_kid_wrapper_still_verifies_when_overlay_configured(
+    isolated_store, verification_key, monkeypatch
+):
+    """Configuring the overlay key must never break existing -1 verification
+    -- a wrapper with the base (-1, ephemeral test) kid still verifies
+    against the base key even while an overlay key is present."""
+    receipt = _inner_receipt("overlay-base-unaffected")
+    wrapper = _wrap(receipt)  # TEST_KID, signed with _TEST_SIGNING_KEY (base)
+    store_recording_wrapper(wrapper)
+    monkeypatch.setattr(
+        svc, "_recording_overlay_public_key", lambda: _OVERLAY_KEY.public_key()
+    )
+
+    resp = svc.get_sar402_recording(receipt["receipt_id"])
+    assert resp["wrapper"]["recording_key_id"] == TEST_KID
+
+
+def test_overlay_kid_wrapper_fails_closed_when_overlay_not_configured(
+    isolated_store, verification_key, monkeypatch
+):
+    """A wrapper claiming the overlay kid must NOT verify against the base
+    key by accident -- if no overlay key is configured, it fails closed."""
+    receipt = _inner_receipt("overlay-unconfigured")
+    wrapper = build_recording_wrapper(
+        receipt,
+        signing_key=_OVERLAY_KEY,
+        kid=svc._RECORDING_OVERLAY_KID,
+    )
+    store_recording_wrapper(wrapper)
+    monkeypatch.setattr(svc, "_recording_overlay_public_key", lambda: None)
+
+    with pytest.raises(HTTPException) as exc:
+        svc.get_sar402_recording(receipt["receipt_id"])
+    assert exc.value.status_code == 500
+    assert exc.value.detail == "recording wrapper verification failed"
+
+
+def test_overlay_public_key_loader_reads_env_var(monkeypatch):
+    monkeypatch.setenv(
+        svc._RECORDING_OVERLAY_PUBLIC_KEY_ENV,
+        "e8608e251cce27bfe497da27e97a08d3e1efca4bd4809fb6364fb2af9a34f29e",
+    )
+    key = svc._recording_overlay_public_key()
+    assert key is not None
+
+
+def test_overlay_public_key_loader_returns_none_when_unset(monkeypatch):
+    monkeypatch.delenv(svc._RECORDING_OVERLAY_PUBLIC_KEY_ENV, raising=False)
+    assert svc._recording_overlay_public_key() is None
+
+
+# ---------------------------------------------------------------------------
 # Phase 4: canonical public_demo receipt, ephemeral key only
 # ---------------------------------------------------------------------------
 

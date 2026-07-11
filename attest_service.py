@@ -83,6 +83,7 @@ app.include_router(sar402_receipts_router)
 import os as _os  # noqa: E402
 
 import sar402_recording_store as recording_store  # noqa: E402
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey  # noqa: E402
 from sar402_recording_wrapper import (  # noqa: E402
     load_public_key as _load_recording_public_key,
     verify_recording_wrapper,
@@ -137,6 +138,32 @@ def _recording_public_key():
     the endpoint surfaces as a 503. Tests inject an ephemeral test public key by
     monkeypatching this function."""
     return _load_recording_public_key(_os.environ)
+
+
+# SAR-402 Path B kid rotation: temporary verifier overlap. During a -1 -> -2
+# signer rotation, the verifier accepts wrappers signed under EITHER kid --
+# -1's key via _recording_public_key() above (unchanged), -2's key via this
+# overlay, selected only for wrappers whose recording_key_id is exactly
+# _RECORDING_OVERLAY_KID. Additive and backward-compatible: unset/absent
+# leaves all existing (kid -1) verification behavior untouched, and no
+# existing test needs to change. See
+# reports/approvals/sar-402-path-b-production-rotation-execution-decision-20260711.md
+# Sec.5 (Option A) for the rotation strategy this implements.
+_RECORDING_OVERLAY_KID = "defaultverifier-recording-ed25519-2"
+_RECORDING_OVERLAY_PUBLIC_KEY_ENV = "SAR402_RECORDING_PUBLIC_KEY_HEX_PATHB_2"
+
+
+def _recording_overlay_public_key():
+    """Return the -2 overlay VERIFICATION (public) key, or None if unconfigured
+    or malformed. Never a private key; never required for -1 verification to
+    keep working."""
+    raw = (_os.environ.get(_RECORDING_OVERLAY_PUBLIC_KEY_ENV) or "").strip().lower()
+    if not raw:
+        return None
+    try:
+        return Ed25519PublicKey.from_public_bytes(bytes.fromhex(raw))
+    except (ValueError, TypeError):
+        return None
 
 
 def _is_valid_receipt_id(receipt_id: str) -> bool:
@@ -1134,7 +1161,19 @@ def get_sar402_recording(receipt_id: str):
     if public_key is None:
         raise HTTPException(status_code=503, detail="recording key unavailable")
 
-    if not verify_recording_wrapper(wrapper, public_key=public_key):
+    # Temporary verifier overlap (SAR-402 Path B kid rotation): a wrapper
+    # explicitly claiming the -2 kid is checked against the -2 overlay key
+    # when configured; every other kid (including -1 and anything
+    # unrecognized) is checked against the base key exactly as before. This
+    # never weakens -1 verification and never trusts -2 unless the overlay
+    # key is explicitly configured.
+    verify_key = public_key
+    if wrapper.get("recording_key_id") == _RECORDING_OVERLAY_KID:
+        overlay_key = _recording_overlay_public_key()
+        if overlay_key is not None:
+            verify_key = overlay_key
+
+    if not verify_recording_wrapper(wrapper, public_key=verify_key):
         raise HTTPException(
             status_code=500, detail="recording wrapper verification failed"
         )
