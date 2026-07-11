@@ -30,18 +30,12 @@ ACTIVATION_LEDGER = BASE_DIR / "agent_activation_master.jsonl"
 ANALYTICS_LEDGER = BASE_DIR / "activation_analytics_master.jsonl"
 CHAIN_LEDGER = BASE_DIR / "attest_chains_master.jsonl"
 RECEIPT_LEDGER = BASE_DIR / "attest_receipts_master.jsonl"
-TRUSTSCORE_CACHE_FILE = BASE_DIR / "trustscore_cache.json"
-TRUSTSCORE_CACHE_LOCK_FILE = BASE_DIR / "trustscore_cache.lock"
 
 CONTINUITY_EVALUATE_URL = "http://127.0.0.1:3002/continuity/evaluate"
 CONTINUITY_CHAIN_URL = "http://127.0.0.1:3002/continuity/chain"
 SAR_URL = "http://127.0.0.1:3001/settlement-witness"
-TRUSTSCORE_URL_BASE = "http://127.0.0.1:3001/trustscore"
 
 HTTP_TIMEOUT_SECONDS = 15
-TRUSTSCORE_TIMEOUT_SECONDS = 1.0
-TRUSTSCORE_CACHE_TTL_SECONDS = 300
-TRUSTSCORE_CACHE_MAX_ENTRIES = 256
 DEFAULT_LIMIT = 50
 MAX_LIMIT = 200
 DEFAULT_EXTERNAL_VERIFIER = "Default Settlement"
@@ -173,114 +167,6 @@ def _is_valid_receipt_id(receipt_id: str) -> bool:
     hexpart = receipt_id[len("sha256:"):]
     return len(hexpart) == 64 and all(c in "0123456789abcdef" for c in hexpart)
 
-
-@contextmanager
-def trustscore_cache_file_lock():
-    TRUSTSCORE_CACHE_LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
-    with TRUSTSCORE_CACHE_LOCK_FILE.open("a+", encoding="utf-8") as f:
-        if fcntl:
-            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
-        try:
-            yield
-        finally:
-            if fcntl:
-                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
-
-
-def trustscore_cache_metadata(cached_at: float, state: str) -> dict[str, Any]:
-    return {
-        "state": state,
-        "cached_at": datetime.fromtimestamp(cached_at, timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
-        "age_seconds": max(0, int(time.time() - cached_at)),
-        "source": "settlement-witness",
-    }
-
-
-def read_trustscore_cache_unlocked() -> dict[str, Any]:
-    if not TRUSTSCORE_CACHE_FILE.exists():
-        return {}
-    try:
-        data = json.loads(TRUSTSCORE_CACHE_FILE.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {}
-    entries = data.get("entries") if isinstance(data, dict) else None
-    return entries if isinstance(entries, dict) else {}
-
-
-def write_trustscore_cache_unlocked(entries: dict[str, Any]) -> None:
-    TRUSTSCORE_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    payload = {
-        "version": 1,
-        "updated_at": iso_now(),
-        "entries": entries,
-    }
-    tmp_path = TRUSTSCORE_CACHE_FILE.with_name(f".{TRUSTSCORE_CACHE_FILE.name}.{uuid4().hex}.tmp")
-    try:
-        tmp_path.write_text(json.dumps(payload, separators=(",", ":"), ensure_ascii=False), encoding="utf-8")
-        tmp_path.replace(TRUSTSCORE_CACHE_FILE)
-    finally:
-        if tmp_path.exists():
-            tmp_path.unlink()
-
-
-def cached_trustscore(agent_id: str) -> tuple[dict[str, Any], float] | None:
-    with trustscore_cache_file_lock():
-        entry = read_trustscore_cache_unlocked().get(agent_id)
-    if not isinstance(entry, dict):
-        return None
-    trustscore = entry.get("trustscore_v1")
-    cached_at = entry.get("cached_at")
-    if not isinstance(trustscore, dict) or not isinstance(cached_at, (int, float)):
-        return None
-    return copy.deepcopy(trustscore), float(cached_at)
-
-
-def store_trustscore(agent_id: str, trustscore: dict[str, Any]) -> dict[str, Any]:
-    trustscore_copy = copy.deepcopy(trustscore)
-    with trustscore_cache_file_lock():
-        entries = read_trustscore_cache_unlocked()
-        if agent_id in entries:
-            entries.pop(agent_id)
-        elif len(entries) >= TRUSTSCORE_CACHE_MAX_ENTRIES:
-            oldest_agent_id = min(entries, key=lambda key: entries[key].get("cached_at", 0) if isinstance(entries[key], dict) else 0)
-            entries.pop(oldest_agent_id)
-        entries[agent_id] = {
-            "trustscore_v1": trustscore_copy,
-            "cached_at": time.time(),
-        }
-        write_trustscore_cache_unlocked(entries)
-    return copy.deepcopy(trustscore_copy)
-
-
-def fetch_trustscore_live(agent_id: str) -> dict[str, Any] | None:
-    try:
-        r = requests.get(f"{TRUSTSCORE_URL_BASE}/{quote(agent_id, safe='')}", timeout=TRUSTSCORE_TIMEOUT_SECONDS)
-        if r.status_code >= 400:
-            return None
-        data = r.json()
-        ts = data.get("trustscore_v1")
-        return ts if isinstance(ts, dict) else None
-    except (requests.RequestException, ValueError):
-        return None
-
-
-def fetch_trustscore(agent_id: str) -> dict[str, Any] | None:
-    cached = cached_trustscore(agent_id)
-    if cached:
-        cached_score, cached_at = cached
-        if time.time() - cached_at < TRUSTSCORE_CACHE_TTL_SECONDS:
-            return cached_score
-
-    live_score = fetch_trustscore_live(agent_id)
-    if live_score is not None:
-        return store_trustscore(agent_id, live_score)
-
-    if cached:
-        cached_score, cached_at = cached
-        cached_score["_cache"] = trustscore_cache_metadata(cached_at, "stale")
-        return cached_score
-
-    return None
 
 def iso_now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
@@ -1593,8 +1479,6 @@ def historical_import_agent(input: HistoricalImportAgentInput):
 
     now = iso_now()
     activation_id = "historical_import:" + uuid4().hex
-    # DEPRECATED (D1, morpheus:state/DECISIONS.md, removal by 2026-08-10).
-    trustscore_url = f"/trustscore/{input.agent_id}"
     explorer_url = f"/v1/attest/chain/{chain_id}"
     external_provenance = external_provenance_from_payload(origin_anchor=input.origin_anchor, lineage=input.lineage)
 
@@ -1618,7 +1502,6 @@ def historical_import_agent(input: HistoricalImportAgentInput):
         "chain_ids": [chain_id],
         "latest_chain_id": chain_id,
         "explorer_url": explorer_url,
-        "trustscore_url": trustscore_url,
         "metadata": input.metadata,
     }
     write_agent(registry)
@@ -2165,11 +2048,13 @@ def get_agent_summary(agent_id: str, limit: int | None = Query(DEFAULT_LIMIT)):
         + [item.get("created_at") for item in all_receipts]
         if value
     ]
-    # DEPRECATED (D1, morpheus:state/DECISIONS.md, removal by 2026-08-10):
-    # trustscore_url/badge_url/trustscore_v1 below. Do not add new consumers.
-    trustscore_url = f"/trustscore/{agent_id}"
+    # badge_url/badge_markdown are retained past the D1 terminal date deliberately:
+    # they are actively read by the deployed sar-explorer frontend (explorer.html,
+    # start.html) with evidenced live production traffic, and the badge/link targets
+    # they point to are already non-scoring, facts-only surfaces (settlement-witness
+    # demolition work, morpheus:state/STATE.md). Removing them is a breaking API
+    # change requiring its own evidenced migration plan, out of scope here.
     badge_url = f"/badge/{agent_id}.svg"
-    trustscore_v1 = fetch_trustscore(agent_id)
     evidence_summary = {
         "receipt_count": len(evidence_receipt_ids),
         "chain_count": len(all_chains),
@@ -2188,8 +2073,6 @@ def get_agent_summary(agent_id: str, limit: int | None = Query(DEFAULT_LIMIT)):
         "chains": chains,
         "receipts": receipts,
         "evidence_summary": evidence_summary,
-        "trustscore_v1": trustscore_v1,
-        "trustscore_url": trustscore_url,
         "badge_url": badge_url,
         "badge_markdown": build_badge_markdown(agent_id),
     }

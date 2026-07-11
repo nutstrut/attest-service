@@ -103,39 +103,28 @@ Important concepts:
 - Agent Profile: Explorer-facing registry and evidence summary for an agent.
 - Public Trust Report: public verification surface for an agent's machine trust evidence.
 
-**DEPRECATED (D1, `state/DECISIONS.md` in the `morpheus` repo, terminal date
-2026-08-10):** TrustScore is frozen and being demolished. The fields and
-routes below (`trustscore_v1`, `trustscore_url`, `badge_url`,
-`badge_markdown`, `/trustscore/{agent_id}`) are scheduled for removal no
-later than 2026-08-10. Do not add new consumers of these fields. This
-section is retained only to document current (pre-removal) behavior during
-the deprecation window.
+**D1 removal complete in this repository (`state/DECISIONS.md` in the
+`morpheus` repo, terminal date 2026-08-10):** `trustscore_v1`, `trustscore_url`,
+the local TrustScore cache (`trustscore_cache.json`/`.lock`), the
+fetch/cache helper chain, and `warm_trustscore_cache.py` have been removed
+from this service. `attest-service` never computed TrustScore and no longer
+caches or forwards it in any form.
 
-TrustScore is completely separate. This service does not compute or mutate
-TrustScore. Explorer links to existing TrustScore pages at:
-
-```text
-/trustscore/{agent_id}
-```
-
-Agent summary responses may include a cached `trustscore_v1` value from
-`trustscore_cache.json`. Settlement Witness remains the source of truth:
-summaries refresh TrustScore with a short timeout, and if that refresh fails
-after a previous successful fetch, the cached score is returned with
-`_cache.state` set to `stale`.
-
-To manually warm the local TrustScore cache for a known agent:
-
-```bash
-python3 warm_trustscore_cache.py agent:cli-speedrun-20260608-160425-124d18
-```
-
-The existing badge system is unchanged. Explorer only displays the existing
-badge image at:
+`badge_url` and `badge_markdown` are **retained**, not removed, because they
+are actively read by the deployed Explorer frontend (`sar-explorer`
+`explorer.html`/`start.html`) with evidenced live production traffic. The
+badge and link targets they point to are already non-scoring, facts-only
+surfaces (see settlement-witness's completed TrustScore demolition work).
+Explorer only displays the existing badge image at:
 
 ```text
 /badge/{agent_id}.svg
 ```
+
+The compatibility link embedded in `badge_markdown` still points at
+`/trustscore/{agent_id}` (served by settlement-witness as a facts-only
+compatibility response, not by this service). Retiring that route/link is a
+separate, later-gated decision, not part of this repository's removal.
 
 ## New API Endpoints
 
@@ -235,8 +224,7 @@ It displays:
 - `latest_activation_id`
 - `latest_chain_id`
 - `latest_sar_receipt_id`
-- TrustScore link: `/trustscore/{agent_id}` (**deprecated, D1, removal by 2026-08-10**)
-- Badge image: `/badge/{agent_id}.svg` (**deprecated, D1** -- badge URL shape stays through the D1 window per the demolition plan, but will stop being score-bearing)
+- Badge image: `/badge/{agent_id}.svg` (retained; non-scoring, evidence-only badge; see D1 note above)
 - Markdown badge embed snippet
 - Recent receipts for this agent
 - Recent chains for this agent
@@ -251,25 +239,20 @@ GET /v1/agents/{agent_id}/summary
 
 Summary response includes:
 
-`trustscore_v1`/`trustscore_url`/`badge_url`/`badge_markdown`: **DEPRECATED
-(D1)**, scheduled for removal no later than 2026-08-10. Do not build new
-consumers against these fields.
+`badge_url`/`badge_markdown`: retained for the evidenced live Explorer
+consumer (see D1 note above). `trustscore_v1` and `trustscore_url` were
+removed under D1 and are no longer present in the response.
 
 ```json
 {
-  "trustscore_v1": {
-    "score": 0,
-    "tier": "string",
-    "reliability": {},
-    "volume": {},
-    "next_tier": {}
-  },
   "evidence_summary": {
     "receipt_count": 0,
     "chain_count": 0,
     "activation_count": 0,
     "latest_activity_at": "ISO-8601 string|null"
-  }
+  },
+  "badge_url": "/badge/{agent_id}.svg",
+  "badge_markdown": "string"
 }
 ```
 
