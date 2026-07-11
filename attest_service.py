@@ -1593,6 +1593,7 @@ def historical_import_agent(input: HistoricalImportAgentInput):
 
     now = iso_now()
     activation_id = "historical_import:" + uuid4().hex
+    # DEPRECATED (D1, morpheus:state/DECISIONS.md, removal by 2026-08-10).
     trustscore_url = f"/trustscore/{input.agent_id}"
     explorer_url = f"/v1/attest/chain/{chain_id}"
     external_provenance = external_provenance_from_payload(origin_anchor=input.origin_anchor, lineage=input.lineage)
@@ -2164,6 +2165,8 @@ def get_agent_summary(agent_id: str, limit: int | None = Query(DEFAULT_LIMIT)):
         + [item.get("created_at") for item in all_receipts]
         if value
     ]
+    # DEPRECATED (D1, morpheus:state/DECISIONS.md, removal by 2026-08-10):
+    # trustscore_url/badge_url/trustscore_v1 below. Do not add new consumers.
     trustscore_url = f"/trustscore/{agent_id}"
     badge_url = f"/badge/{agent_id}.svg"
     trustscore_v1 = fetch_trustscore(agent_id)

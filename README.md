@@ -103,6 +103,14 @@ Important concepts:
 - Agent Profile: Explorer-facing registry and evidence summary for an agent.
 - Public Trust Report: public verification surface for an agent's machine trust evidence.
 
+**DEPRECATED (D1, `state/DECISIONS.md` in the `morpheus` repo, terminal date
+2026-08-10):** TrustScore is frozen and being demolished. The fields and
+routes below (`trustscore_v1`, `trustscore_url`, `badge_url`,
+`badge_markdown`, `/trustscore/{agent_id}`) are scheduled for removal no
+later than 2026-08-10. Do not add new consumers of these fields. This
+section is retained only to document current (pre-removal) behavior during
+the deprecation window.
+
 TrustScore is completely separate. This service does not compute or mutate
 TrustScore. Explorer links to existing TrustScore pages at:
 
@@ -227,8 +235,8 @@ It displays:
 - `latest_activation_id`
 - `latest_chain_id`
 - `latest_sar_receipt_id`
-- TrustScore link: `/trustscore/{agent_id}`
-- Badge image: `/badge/{agent_id}.svg`
+- TrustScore link: `/trustscore/{agent_id}` (**deprecated, D1, removal by 2026-08-10**)
+- Badge image: `/badge/{agent_id}.svg` (**deprecated, D1** -- badge URL shape stays through the D1 window per the demolition plan, but will stop being score-bearing)
 - Markdown badge embed snippet
 - Recent receipts for this agent
 - Recent chains for this agent
@@ -242,6 +250,10 @@ GET /v1/agents/{agent_id}/summary
 ```
 
 Summary response includes:
+
+`trustscore_v1`/`trustscore_url`/`badge_url`/`badge_markdown`: **DEPRECATED
+(D1)**, scheduled for removal no later than 2026-08-10. Do not build new
+consumers against these fields.
 
 ```json
 {
