@@ -241,6 +241,25 @@ def latest_agent(agent_id: str) -> dict[str, Any] | None:
     return latest_by(read_jsonl(AGENT_LEDGER), "agent_id", agent_id)
 
 
+# D1 TrustScore demolition: agent-registry records written before the field
+# removal (attest-service commit e1f19eb) may still carry these keys on disk
+# (see M19, reports/revisit/post-reconciliation-maintenance-register-20260711.md).
+# The ledger is append-only historical evidence and is never rewritten; this
+# boundary strips deprecated fields from the copy returned to API callers only.
+DEPRECATED_AGENT_API_FIELDS = ("trustscore_v1", "trustscore_url")
+
+
+def sanitize_agent_record_for_api(record: dict[str, Any]) -> dict[str, Any]:
+    """Return a deep copy of an agent registry record with deprecated
+    TrustScore-era fields removed, for use at every public API boundary that
+    returns agent data. Never mutates the input or the underlying ledger.
+    """
+    sanitized = copy.deepcopy(record)
+    for field in DEPRECATED_AGENT_API_FIELDS:
+        sanitized.pop(field, None)
+    return sanitized
+
+
 def latest_activation(activation_id: str) -> dict[str, Any] | None:
     return latest_by(read_jsonl(ACTIVATION_LEDGER), "activation_id", activation_id)
 
@@ -1459,6 +1478,7 @@ def list_agents(limit: int | None = Query(DEFAULT_LIMIT)):
     for record in read_jsonl(AGENT_LEDGER):
         records_by_agent[record["agent_id"]] = record
     agents = sorted_agents(list(records_by_agent.values()), bounded_limit(limit))
+    agents = [sanitize_agent_record_for_api(agent) for agent in agents]
     return {"count": len(agents), "agents": agents}
 
 
@@ -1547,7 +1567,7 @@ def get_agent(agent_id: str):
     agent = latest_agent(agent_id)
     if not agent:
         raise HTTPException(status_code=404, detail="agent not found")
-    return agent
+    return sanitize_agent_record_for_api(agent)
 
 
 @app.post("/v1/agents/{agent_id}/activate")
@@ -2068,7 +2088,7 @@ def get_agent_summary(agent_id: str, limit: int | None = Query(DEFAULT_LIMIT)):
         evidence_summary["latest_external_provenance"] = latest_external_provenance_record["external_provenance"]
 
     return {
-        "agent": agent,
+        "agent": sanitize_agent_record_for_api(agent),
         "activations": activations,
         "chains": chains,
         "receipts": receipts,
