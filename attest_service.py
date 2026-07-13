@@ -85,6 +85,18 @@ from sar402_receipts import router as sar402_receipts_router  # noqa: E402
 
 app.include_router(sar402_receipts_router)
 
+# Phase B/C authenticated-producer ingestion: POST /v1/attest/authenticated.
+# Producer-signed ds.authenticated_submission/v1 envelope, verified against
+# the pinned approved-producer registry. Fails closed (503) unless
+# PRODUCER_REGISTRY_PATH/PRODUCER_REGISTRY_SHA256 are explicitly configured;
+# not wired to any production registry or credential by this commit. Does
+# not read or write trusted_internal. See morpheus/state/DECISIONS.md,
+# "Producer-authentication mechanism and attribution-binding construction"
+# (2026-07-13).
+from authenticated_submission_api import router as authenticated_submission_router  # noqa: E402
+
+app.include_router(authenticated_submission_router)
+
 # SAR-402 Path B read surface: GET /v1/sar-402/recording/{receipt_id}. A public,
 # read-only lookup that returns the stored recording-attribution wrapper for an
 # inner receipt (Path B is NOT live; this serves only locally/test-stored

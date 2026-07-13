@@ -1,0 +1,5 @@
+{
+  "schema_version": "morpheus.producer_registry/v1",
+  "producers": [],
+  "notes": "No producer is activated in this file. Decision 4 (morpheus/state/DECISIONS.md, 2026-07-13) requires that a producer only be activated after its process, service unit, executable path, OS user, and credential-isolation proof are recorded and reviewed, and no producer may be activated merely because it runs locally. This registry is implementation/testing scaffolding only; PRODUCER_REGISTRY_PATH/PRODUCER_REGISTRY_SHA256 are not set in any live attest-service environment by this change, so /v1/attest/authenticated fails closed (503) everywhere until a separate deployment decision wires them."
+}
