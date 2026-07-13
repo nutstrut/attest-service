@@ -128,6 +128,9 @@ def test_agent_summary_preserves_unrelated_fields(tmp_path, monkeypatch):
         "latest_activity_at": summary["evidence_summary"]["latest_activity_at"],
         "latest_chain_id": None,
         "latest_receipt_ids": None,
+        # EXEC-018 provenance separation: factual disclosure of which
+        # submission classes this summary was computed from.
+        "provenance_scope": "trusted_evidence_only",
     }
 
 

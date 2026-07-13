@@ -12,7 +12,7 @@ from urllib.parse import quote
 from uuid import uuid4
 
 import requests
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 try:
@@ -42,6 +42,22 @@ DEFAULT_EXTERNAL_VERIFIER = "Default Settlement"
 
 ActivationStage = Literal["registered", "activated", "activation_failed", "verified", "chained", "continuous"]
 ReceiptContext = Literal["activation_demo", "real_task", "continuity_pair", "public_demo"]
+
+# EXEC-018 provenance separation. `submission_provenance` describes HOW a
+# record's evidence arrived, never a quality/reputation judgment about the
+# subject agent. Every chain/receipt/activation write carries exactly one of
+# these classes; downstream trusted-default surfaces (evidence_summary,
+# /v1/explorer/metrics, /v1/chains, /v1/receipts) include only the trusted
+# classes unless the caller explicitly asks to see everything.
+SubmissionProvenance = Literal[
+    "anonymous_untrusted", "authenticated_claim", "independently_verified", "trusted_internal"
+]
+# Records written before this field existed carry no submission_provenance at
+# all. They are never rewritten (immutable historical bytes); read paths treat
+# a missing field as its own explicit, non-trusted class rather than silently
+# trusting or silently discarding it.
+LEGACY_UNKNOWN_PROVENANCE = "legacy_unknown"
+TRUSTED_PROVENANCE_CLASSES = frozenset({"authenticated_claim", "independently_verified", "trusted_internal"})
 
 STAGE_ORDER = {
     "registered": 0,
@@ -215,6 +231,38 @@ def read_jsonl(path: Path) -> list[dict[str, Any]]:
         if line:
             out.append(json.loads(line))
     return out
+
+
+def classify_submission_provenance(request: Request | None) -> str:
+    """Mechanically classify the caller of a write-path route.
+
+    Port 3004 (this process) is not reachable from the public internet: ufw
+    is default-deny-inbound and only 22/80/443 are allowed. The only public
+    path to any /v1/attest-family route is nginx's `proxy_pass
+    http://127.0.0.1:3004`, which unconditionally sets X-Forwarded-For and
+    X-Real-IP. A request that lacks BOTH headers therefore did not arrive via
+    the public proxy and can only have originated from a process already
+    running on this host (e.g. Morpheus's task_runner, hermes-monitor) --
+    this is a fact about network topology, not a claim the caller can make
+    about itself. Absence of a request object (a route invoked directly, not
+    through the ASGI app) fails closed to the untrusted class.
+    """
+    if request is None:
+        return "anonymous_untrusted"
+    if request.headers.get("x-forwarded-for") or request.headers.get("x-real-ip"):
+        return "anonymous_untrusted"
+    return "trusted_internal"
+
+
+def record_submission_provenance(record: dict[str, Any]) -> str:
+    """Provenance of an already-persisted record, defaulting missing values
+    (records written before this field existed) to the explicit,
+    non-trusted `legacy_unknown` class. Never mutates the record."""
+    return record.get("submission_provenance") or LEGACY_UNKNOWN_PROVENANCE
+
+
+def is_trusted_provenance(record: dict[str, Any]) -> bool:
+    return record_submission_provenance(record) in TRUSTED_PROVENANCE_CLASSES
 
 
 def bounded_limit(limit: int | None) -> int:
@@ -410,6 +458,7 @@ def write_receipt(
     activation_id: str | None = None,
     chain_id: str | None = None,
     external_provenance: dict[str, Any] | None = None,
+    submission_provenance: str = "anonymous_untrusted",
 ) -> None:
     receipt_id = receipt.get("receipt_id")
     if not receipt_id:
@@ -422,6 +471,7 @@ def write_receipt(
         "activation_id": activation_id,
         "chain_id": chain_id,
         "created_at": iso_now(),
+        "submission_provenance": submission_provenance,
         "receipt": receipt,
     }
     if external_provenance:
@@ -446,6 +496,7 @@ def write_chain(
     external_provenance: dict[str, Any] | None = None,
     executor_id: str | None = None,
     execution_mode: str | None = None,
+    submission_provenance: str = "anonymous_untrusted",
 ) -> dict[str, Any]:
     # agent_id is the accountable subject (TrustScore attribution). executor_id
     # / execution_mode are additive audit metadata about who actually performed
@@ -464,6 +515,7 @@ def write_chain(
         "stage": stage,
         "receipt_context": receipt_context,
         "created_at": iso_now(),
+        "submission_provenance": submission_provenance,
     }
     if external_provenance:
         record["external_provenance"] = external_provenance
@@ -721,6 +773,7 @@ def record_failed_activation(
     sar_verdict: Any = None,
     reason_code: Any = None,
     elapsed_ms: int | None = None,
+    submission_provenance: str = "anonymous_untrusted",
 ) -> dict[str, Any]:
     now = iso_now()
     error_detail = error if isinstance(error, (str, int, float, bool, dict, list)) or error is None else str(error)
@@ -741,6 +794,7 @@ def record_failed_activation(
         "created_at": now,
         "updated_at": now,
         "metadata": metadata,
+        "submission_provenance": submission_provenance,
     }
     append_jsonl(ACTIVATION_LEDGER, activation_record)
     failed_agent = registry_record(
@@ -839,8 +893,9 @@ def healthz():
 
 
 @app.post("/v1/attest")
-def attest(input: SyncAttestInput):
+def attest(input: SyncAttestInput, request: Request = None):
     t0 = time.perf_counter()
+    submission_provenance = classify_submission_provenance(request)
     continuity = post_json(CONTINUITY_EVALUATE_URL, input.continuity_input)
     continuity_receipt_id = continuity.get("receipt_id")
     if not continuity_receipt_id:
@@ -867,16 +922,24 @@ def attest(input: SyncAttestInput):
         external_provenance=external_provenance,
         executor_id=sar_payload.get("executor_id"),
         execution_mode=sar_payload.get("execution_mode"),
+        submission_provenance=submission_provenance,
     )
     if external_provenance:
         chain = {**chain, "external_provenance": external_provenance}
-    write_receipt(receipt=continuity, receipt_type="continuity", receipt_context=input.receipt_context, chain_id=chain_id)
+    write_receipt(
+        receipt=continuity,
+        receipt_type="continuity",
+        receipt_context=input.receipt_context,
+        chain_id=chain_id,
+        submission_provenance=submission_provenance,
+    )
     write_receipt(
         receipt=sar,
         receipt_type="sar",
         receipt_context=input.receipt_context,
         chain_id=chain_id,
         external_provenance=external_provenance,
+        submission_provenance=submission_provenance,
     )
 
     return {
@@ -885,6 +948,7 @@ def attest(input: SyncAttestInput):
         "mode": "sync",
         "status": "complete",
         "receipt_context": input.receipt_context,
+        "submission_provenance": submission_provenance,
         "elapsed_ms": int((time.perf_counter() - t0) * 1000),
         "continuity": continuity,
         "sar": sar,
@@ -893,7 +957,8 @@ def attest(input: SyncAttestInput):
 
 
 @app.post("/v1/attest/begin")
-def begin(input: BeginInput):
+def begin(input: BeginInput, request: Request = None):
+    submission_provenance = classify_submission_provenance(request)
     continuity = post_json(CONTINUITY_EVALUATE_URL, input.continuity_input)
     continuity_receipt_id = continuity.get("receipt_id")
     external_provenance = external_provenance_from_payload(continuity_input=input.continuity_input)
@@ -910,17 +975,23 @@ def begin(input: BeginInput):
         "continuity_receipt_id": continuity_receipt_id,
         "metadata": input.metadata,
         "created_at": iso_now(),
+        "submission_provenance": submission_provenance,
     }
     if external_provenance:
         session_record["external_provenance"] = external_provenance
     append_jsonl(SESSION_LEDGER, session_record)
-    write_receipt(receipt=continuity, receipt_type="continuity", receipt_context=input.receipt_context)
+    write_receipt(
+        receipt=continuity,
+        receipt_type="continuity",
+        receipt_context=input.receipt_context,
+        submission_provenance=submission_provenance,
+    )
 
     return {"session_id": session_id, "status": "pending", "receipt_context": input.receipt_context, "continuity": continuity}
 
 
 @app.post("/v1/attest/complete")
-def complete(input: CompleteInput):
+def complete(input: CompleteInput, request: Request = None):
     session = latest_session(input.session_id)
 
     if not session:
@@ -928,6 +999,19 @@ def complete(input: CompleteInput):
 
     if session.get("status") == "complete":
         raise HTTPException(status_code=409, detail="session already complete")
+
+    # The begin-time provenance (from /v1/attest/begin) is honored if it was
+    # already anonymous; otherwise this call's own caller is re-classified.
+    # Either write path can only make the record LESS trusted, never more --
+    # a session begun anonymously cannot be completed into a trusted record
+    # by a differently-classified completer.
+    begin_provenance = session.get("submission_provenance") or "anonymous_untrusted"
+    complete_provenance = classify_submission_provenance(request)
+    submission_provenance = (
+        complete_provenance
+        if begin_provenance in TRUSTED_PROVENANCE_CLASSES and complete_provenance in TRUSTED_PROVENANCE_CLASSES
+        else "anonymous_untrusted"
+    )
 
     continuity_receipt_id = session.get("continuity_receipt_id")
     receipt_context = input.receipt_context or session.get("receipt_context") or "real_task"
@@ -950,6 +1034,7 @@ def complete(input: CompleteInput):
         "sar_receipt_id": sar_receipt_id,
         "chain_id": chain_id,
         "completed_at": iso_now(),
+        "submission_provenance": submission_provenance,
     }
     if external_provenance:
         completed_session_record["external_provenance"] = external_provenance
@@ -965,6 +1050,7 @@ def complete(input: CompleteInput):
         external_provenance=external_provenance,
         executor_id=sar_payload.get("executor_id"),
         execution_mode=sar_payload.get("execution_mode"),
+        submission_provenance=submission_provenance,
     )
     write_receipt(
         receipt=sar,
@@ -972,6 +1058,7 @@ def complete(input: CompleteInput):
         receipt_context=receipt_context,
         chain_id=chain_id,
         external_provenance=external_provenance,
+        submission_provenance=submission_provenance,
     )
 
     return {"session_id": input.session_id, "status": "complete", "receipt_context": receipt_context, "sar": sar, "chain_id": chain_id}
@@ -1571,8 +1658,9 @@ def get_agent(agent_id: str):
 
 
 @app.post("/v1/agents/{agent_id}/activate")
-def activate_agent(agent_id: str, input: ActivateAgentInput):
+def activate_agent(agent_id: str, input: ActivateAgentInput, request: Request = None):
     t0 = time.perf_counter()
+    submission_provenance = classify_submission_provenance(request)
     agent = latest_agent(agent_id)
     if not agent:
         raise HTTPException(status_code=404, detail="agent not found")
@@ -1637,6 +1725,7 @@ def activate_agent(agent_id: str, input: ActivateAgentInput):
             continuity_receipt_id=continuity_receipt_id,
             sar_receipt_id=sar_receipt_id,
             elapsed_ms=elapsed_ms,
+            submission_provenance=submission_provenance,
         )
         raise HTTPException(
             status_code=exc.status_code,
@@ -1659,6 +1748,7 @@ def activate_agent(agent_id: str, input: ActivateAgentInput):
             continuity_receipt_id=continuity_receipt_id,
             sar_receipt_id=sar_receipt_id,
             elapsed_ms=elapsed_ms,
+            submission_provenance=submission_provenance,
         )
         raise HTTPException(
             status_code=502,
@@ -1686,6 +1776,7 @@ def activate_agent(agent_id: str, input: ActivateAgentInput):
             sar_verdict=sar_verdict,
             reason_code=sar_reason,
             elapsed_ms=elapsed_ms,
+            submission_provenance=submission_provenance,
         )
         write_receipt(
             receipt=continuity,
@@ -1693,6 +1784,7 @@ def activate_agent(agent_id: str, input: ActivateAgentInput):
             receipt_context=input.receipt_context,
             agent_id=agent_id,
             activation_id=activation_id,
+            submission_provenance=submission_provenance,
         )
         write_receipt(
             receipt=sar,
@@ -1701,6 +1793,7 @@ def activate_agent(agent_id: str, input: ActivateAgentInput):
             agent_id=agent_id,
             activation_id=activation_id,
             external_provenance=external_provenance,
+            submission_provenance=submission_provenance,
         )
         return {
             "activation_id": activation_id,
@@ -1759,6 +1852,7 @@ def activate_agent(agent_id: str, input: ActivateAgentInput):
         stage="chained",
         receipt_context=input.receipt_context,
         external_provenance=external_provenance,
+        submission_provenance=submission_provenance,
     )
     if external_provenance:
         chain = {**chain, "external_provenance": external_provenance}
@@ -1791,6 +1885,7 @@ def activate_agent(agent_id: str, input: ActivateAgentInput):
         "created_at": now,
         "updated_at": now,
         "metadata": input.metadata,
+        "submission_provenance": submission_provenance,
     }
     if external_provenance:
         activation_record["external_provenance"] = external_provenance
@@ -1802,6 +1897,7 @@ def activate_agent(agent_id: str, input: ActivateAgentInput):
         agent_id=agent_id,
         activation_id=activation_id,
         chain_id=chain_id,
+        submission_provenance=submission_provenance,
     )
     write_receipt(
         receipt=sar,
@@ -1811,6 +1907,7 @@ def activate_agent(agent_id: str, input: ActivateAgentInput):
         activation_id=activation_id,
         chain_id=chain_id,
         external_provenance=external_provenance,
+        submission_provenance=submission_provenance,
     )
     write_agent(chained_agent)
     elapsed_ms = int((time.perf_counter() - t0) * 1000)
@@ -1847,7 +1944,8 @@ def activate_agent(agent_id: str, input: ActivateAgentInput):
     }
 
 @app.post("/v1/agents/{agent_id}/continuity")
-def record_continuity_pair(agent_id: str, input: ContinuityPairInput):
+def record_continuity_pair(agent_id: str, input: ContinuityPairInput, request: Request = None):
+    submission_provenance = classify_submission_provenance(request)
     agent = latest_agent(agent_id)
     if not agent:
         raise HTTPException(status_code=404, detail="agent not found")
@@ -1893,6 +1991,7 @@ def record_continuity_pair(agent_id: str, input: ContinuityPairInput):
         stage="continuous",
         receipt_context="continuity_pair",
         external_provenance=external_provenance,
+        submission_provenance=submission_provenance,
     )
 
     continuous_agent = registry_record(
@@ -1924,6 +2023,7 @@ def record_continuity_pair(agent_id: str, input: ContinuityPairInput):
             "created_at": existing_activation.get("created_at") or chain_created_at,
             "updated_at": chain_created_at,
             "metadata": {**existing_activation.get("metadata", {}), **input.metadata},
+            "submission_provenance": submission_provenance,
         }
         if external_provenance:
             updated_activation["external_provenance"] = external_provenance
@@ -1936,6 +2036,7 @@ def record_continuity_pair(agent_id: str, input: ContinuityPairInput):
         agent_id=agent_id,
         activation_id=activation_id,
         chain_id=chain_id,
+        submission_provenance=submission_provenance,
     )
     write_analytics(
         agent_id=agent_id,
@@ -1968,7 +2069,13 @@ def record_continuity_pair(agent_id: str, input: ContinuityPairInput):
 
 
 @app.get("/v1/agents/{agent_id}/activations")
-def list_agent_activations(agent_id: str, limit: int | None = Query(DEFAULT_LIMIT), stage: str | None = None, receipt_context: str | None = None):
+def list_agent_activations(
+    agent_id: str,
+    limit: int | None = Query(DEFAULT_LIMIT),
+    stage: str | None = None,
+    receipt_context: str | None = None,
+    include_anonymous: bool = False,
+):
     if not latest_agent(agent_id):
         raise HTTPException(status_code=404, detail="agent not found")
     if stage and stage not in STAGE_ORDER:
@@ -1983,6 +2090,8 @@ def list_agent_activations(agent_id: str, limit: int | None = Query(DEFAULT_LIMI
         if stage and record.get("stage") != stage and record.get("activation_stage") != stage:
             continue
         if receipt_context and record.get("receipt_context") != receipt_context:
+            continue
+        if not include_anonymous and not is_trusted_provenance(record):
             continue
         activations_by_id[record["activation_id"]] = record
     activations = sorted_recent(list(activations_by_id.values()), "created_at", bounded_limit(limit))
@@ -1999,39 +2108,54 @@ def get_activation(activation_id: str):
 
 
 @app.get("/v1/chains")
-def list_chains(agent_id: str | None = None, limit: int | None = Query(DEFAULT_LIMIT)):
+def list_chains(agent_id: str | None = None, limit: int | None = Query(DEFAULT_LIMIT), include_anonymous: bool = False):
     chains = read_jsonl(CHAIN_LEDGER)
     if agent_id:
         chains = [chain for chain in chains if chain.get("agent_id") == agent_id]
+    if not include_anonymous:
+        chains = [chain for chain in chains if is_trusted_provenance(chain)]
     chains = sorted_recent(chains, "created_at", bounded_limit(limit))
     return {"count": len(chains), "chains": chains}
 
 
 @app.get("/v1/receipts")
-def list_receipts(agent_id: str | None = None, limit: int | None = Query(DEFAULT_LIMIT)):
+def list_receipts(agent_id: str | None = None, limit: int | None = Query(DEFAULT_LIMIT), include_anonymous: bool = False):
     receipts = read_jsonl(RECEIPT_LEDGER)
     if agent_id:
         receipts = [receipt for receipt in receipts if receipt.get("agent_id") == agent_id]
+    if not include_anonymous:
+        receipts = [receipt for receipt in receipts if is_trusted_provenance(receipt)]
     receipts = sorted_recent(receipts, "created_at", bounded_limit(limit))
     return {"count": len(receipts), "receipts": receipts}
 
 
 @app.get("/v1/agents/{agent_id}/summary")
-def get_agent_summary(agent_id: str, limit: int | None = Query(DEFAULT_LIMIT)):
+def get_agent_summary(agent_id: str, limit: int | None = Query(DEFAULT_LIMIT), include_anonymous: bool = False):
     agent = latest_agent(agent_id)
     if not agent:
         raise HTTPException(status_code=404, detail="agent not found")
 
     actual_limit = bounded_limit(limit)
-    activations = list_agent_activations(agent_id, limit=actual_limit)["activations"]
-    chains = list_chains(agent_id=agent_id, limit=actual_limit)["chains"]
-    receipts = list_receipts(agent_id=agent_id, limit=actual_limit)["receipts"]
+    activations = list_agent_activations(agent_id, limit=actual_limit, include_anonymous=include_anonymous)["activations"]
+    chains = list_chains(agent_id=agent_id, limit=actual_limit, include_anonymous=include_anonymous)["chains"]
+    receipts = list_receipts(agent_id=agent_id, limit=actual_limit, include_anonymous=include_anonymous)["receipts"]
     all_activations_by_id: dict[str, dict[str, Any]] = {}
     for record in read_jsonl(ACTIVATION_LEDGER):
-        if record.get("agent_id") == agent_id:
-            all_activations_by_id[record["activation_id"]] = record
-    all_chains = [record for record in read_jsonl(CHAIN_LEDGER) if record.get("agent_id") == agent_id]
-    all_receipts = [record for record in read_jsonl(RECEIPT_LEDGER) if record.get("agent_id") == agent_id]
+        if record.get("agent_id") != agent_id:
+            continue
+        if not include_anonymous and not is_trusted_provenance(record):
+            continue
+        all_activations_by_id[record["activation_id"]] = record
+    all_chains = [
+        record
+        for record in read_jsonl(CHAIN_LEDGER)
+        if record.get("agent_id") == agent_id and (include_anonymous or is_trusted_provenance(record))
+    ]
+    all_receipts = [
+        record
+        for record in read_jsonl(RECEIPT_LEDGER)
+        if record.get("agent_id") == agent_id and (include_anonymous or is_trusted_provenance(record))
+    ]
     evidence_receipt_ids = {record.get("receipt_id") for record in all_receipts if record.get("receipt_id")}
     for chain in all_chains:
         for receipt_field in ("continuity_receipt_id", "sar_receipt_id"):
@@ -2086,6 +2210,9 @@ def get_agent_summary(agent_id: str, limit: int | None = Query(DEFAULT_LIMIT)):
     if latest_external_provenance_record:
         evidence_summary["external_provenance_count"] = len(provenance_records)
         evidence_summary["latest_external_provenance"] = latest_external_provenance_record["external_provenance"]
+    # Factual provenance disclosure, never a quality judgment: which class of
+    # submissions this summary was computed from.
+    evidence_summary["provenance_scope"] = "all_submissions_including_unverified" if include_anonymous else "trusted_evidence_only"
 
     return {
         "agent": sanitize_agent_record_for_api(agent),
@@ -2099,7 +2226,7 @@ def get_agent_summary(agent_id: str, limit: int | None = Query(DEFAULT_LIMIT)):
 
 
 @app.get("/v1/explorer/metrics")
-def explorer_metrics():
+def explorer_metrics(include_anonymous: bool = False):
     agents_by_id: dict[str, dict[str, Any]] = {}
     for record in read_jsonl(AGENT_LEDGER):
         agents_by_id[record["agent_id"]] = record
@@ -2107,14 +2234,21 @@ def explorer_metrics():
     activation_records_by_id: dict[str, dict[str, Any]] = {}
     for record in read_jsonl(ACTIVATION_LEDGER):
         activation_id = record.get("activation_id")
-        if activation_id:
-            activation_records_by_id[activation_id] = record
+        if not activation_id:
+            continue
+        if not include_anonymous and not is_trusted_provenance(record):
+            continue
+        activation_records_by_id[activation_id] = record
     activation_records = list(activation_records_by_id.values())
     activation_success_total = sum(1 for record in activation_records if stage_at_least(record.get("activation_stage") or record.get("stage", "registered"), "verified") and record.get("status") != "failed")
     activation_failed_total = sum(1 for record in activation_records if record.get("status") == "failed" or record.get("status") == "activation_failed")
     activation_attempts_total = len(activation_records)
     verified_agents_total = sum(1 for agent in agents if stage_at_least(agent.get("activation_stage", "registered"), "verified") and agent.get("status") != "activation_failed")
-    chain_ids = {chain.get("chain_id") for chain in read_jsonl(CHAIN_LEDGER) if chain.get("chain_id")}
+    chain_ids = {
+        chain.get("chain_id")
+        for chain in read_jsonl(CHAIN_LEDGER)
+        if chain.get("chain_id") and (include_anonymous or is_trusted_provenance(chain))
+    }
     activation_success_rate = activation_success_total / activation_attempts_total if activation_attempts_total else 0
     return {
         "registered_agents_total": len(agents),
@@ -2126,5 +2260,6 @@ def explorer_metrics():
         "chains_total": len(chain_ids),
         "activated_agents_total": activation_attempts_total,
         "activation_conversion_rate": activation_success_rate,
+        "provenance_scope": "all_submissions_including_unverified" if include_anonymous else "trusted_evidence_only",
         "generated_at": iso_now(),
     }

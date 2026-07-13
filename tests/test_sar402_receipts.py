@@ -127,7 +127,17 @@ def _unique_payload(tag: str) -> dict:
 # Acceptance + persistence + Explorer compatibility
 # ---------------------------------------------------------------------------
 
-def test_valid_payload_accepted_and_has_receipt_id_and_explorer_url():
+def test_valid_payload_accepted_and_has_receipt_id_and_explorer_url(tmp_path, monkeypatch):
+    # Pre-existing isolation gap found during EXEC-018 provenance-quarantine
+    # work: this test used the default `persist=True` with no ledger
+    # monkeypatch, so every prior run of this suite appended a duplicate of
+    # the same fixed "accept"-tagged receipt to the real production
+    # attest_receipts_master.jsonl (confirmed: 69 duplicate entries dated
+    # 2026-06-20 through this session's own runs, 3 of which this session
+    # added before the isolation gap was found and closed here). The ledger
+    # is immutable, append-only historical evidence and is not rewritten;
+    # this fix only stops the recurrence going forward.
+    monkeypatch.setattr(svc, "RECEIPT_LEDGER", tmp_path / "receipts.jsonl")
     result = record_sar402_receipt(_unique_payload("accept"))
     assert result["status"] == "recorded"
     assert result["receipt_id"].startswith("sha256:")  # requirement 5
@@ -159,8 +169,15 @@ def test_receipt_is_persisted_and_discoverable(tmp_path, monkeypatch):
     assert found["receipt_id"] == receipt_id
     # /v1/attest/receipt/{id} returns it (not a dead link).
     assert svc.get_receipt(receipt_id)["receipt_id"] == receipt_id
-    # Recent-receipts surface (/v1/receipts) includes it.
-    recent = svc.list_receipts(limit=200)
+    # EXEC-018 provenance separation: this route has no caller authentication
+    # (the API key is optional/unconfigured here), so `write_receipt` records
+    # it with the default `anonymous_untrusted` submission_provenance, and the
+    # default trusted-only /v1/receipts view now excludes it -- discoverable
+    # only via the explicit forensic opt-in, same as any other unauthenticated
+    # submission.
+    recent_trusted_only = svc.list_receipts(limit=200)
+    assert not any(r["receipt_id"] == receipt_id for r in recent_trusted_only["receipts"])
+    recent = svc.list_receipts(limit=200, include_anonymous=True)
     assert any(r["receipt_id"] == receipt_id for r in recent["receipts"])
     # The returned lookup path targets that live route.
     assert result["receipt_lookup_path"].endswith(receipt_id.replace(":", "%3A"))
