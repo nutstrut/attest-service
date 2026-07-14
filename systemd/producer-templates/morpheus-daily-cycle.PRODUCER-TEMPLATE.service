@@ -1,0 +1,61 @@
+# TEMPLATE -- NOT AN INSTALLED UNIT. NOT wired into systemd by this
+# workstream. This is a reviewed proposal for what morpheus-daily-cycle.service
+# would look like AFTER a separately authorized session:
+#   1. runs setup_producer_principal.sh morpheus-daily-cycle to create the
+#      producer-morpheus-daily-cycle OS user/group and credential dir,
+#   2. runs generate_producer_keypair.sh as that user to mint the key,
+#   3. adds the resulting public key as an `active` entry in
+#      config/producer_registry.json (its own separately authorized,
+#      reviewed step -- this template does not do that either),
+#   4. copies this file over the real
+#      /etc/systemd/system/morpheus-daily-cycle.service,
+#   5. runs `systemctl daemon-reload` and restarts the unit.
+#
+# None of steps 1-5 above are performed by this workstream. The current
+# live unit (User=ubuntu) is untouched. This file exists so the actual
+# change, when authorized, is a reviewed diff against a known-good
+# template rather than an ad hoc edit made under time pressure.
+#
+# Only the User=/Group= lines differ from today's live unit +
+# credential-path environment wiring; everything else (ExecStart, working
+# directory, restart policy) is intentionally left exactly as the current
+# production unit so this is a minimal, reviewable, single-purpose change
+# (credential isolation only, not a broader refactor).
+
+[Unit]
+Description=Morpheus Daily Cycle (authenticated-producer principal: morpheus-daily-cycle)
+After=network.target
+
+[Service]
+# Isolation boundary: this dedicated no-login system account is the ONLY
+# principal with read access to
+# /etc/attest-producer-credentials/morpheus-daily-cycle/producer.ed25519.pem
+# (0600, owned producer-morpheus-daily-cycle:producer-morpheus-daily-cycle).
+# Neither `ubuntu` (attest-service, settlement-witness, hermes-monitor,
+# this interactive session, and any cron job under that account) nor any
+# other producer's dedicated principal can read it.
+User=producer-morpheus-daily-cycle
+Group=producer-morpheus-daily-cycle
+
+# Populated by whatever separately-authorized change wires this producer's
+# actual entrypoint/working directory -- placeholders here intentionally,
+# not copied from any real path in this repo, so this template cannot be
+# mistaken for a ready-to-install unit.
+WorkingDirectory=/home/ubuntu/morpheus
+Environment=ATTEST_PRODUCER_ID=morpheus-daily-cycle
+Environment=ATTEST_PRODUCER_CREDENTIAL_PATH=/etc/attest-producer-credentials/morpheus-daily-cycle/producer.ed25519.pem
+ExecStart=/usr/bin/env true  # PLACEHOLDER -- replace with the real daily-cycle entrypoint before any real use
+Restart=always
+RestartSec=3
+
+# Defense in depth beyond the file-permission boundary: even if this unit
+# were somehow compromised, it cannot read files outside its own
+# WorkingDirectory/credential path or escalate privileges.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/home/ubuntu/morpheus
+ReadOnlyPaths=/etc/attest-producer-credentials/morpheus-daily-cycle
+
+[Install]
+WantedBy=multi-user.target
