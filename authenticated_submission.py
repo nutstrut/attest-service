@@ -80,6 +80,14 @@ class ReplayedNonceError(AuthenticatedSubmissionError):
     pass
 
 
+class NonceStoreUnavailableError(AuthenticatedSubmissionError):
+    """Raised when a replay-protection backend (e.g. the durable
+    `SQLiteNonceStore` in replay_ledger.py) cannot be opened or cannot
+    commit an atomic claim. This is a rejection, not an error to recover
+    from by falling back to an unpersisted store -- see replay_ledger.py's
+    module docstring for the fail-closed rationale."""
+
+
 @dataclass(frozen=True)
 class AuthenticatedSubmissionResult:
     producer_id: str
@@ -102,7 +110,23 @@ class NonceStore:
     def __init__(self) -> None:
         self._seen: dict[tuple[str, str], datetime] = {}
 
-    def check_and_record(self, producer_id: str, nonce: str, timestamp: datetime, max_skew: timedelta) -> None:
+    def check_and_record(
+        self,
+        producer_id: str,
+        nonce: str,
+        timestamp: datetime,
+        max_skew: timedelta,
+        *,
+        request_id: str | None = None,
+        route_id: str | None = None,
+        subject_agent_id: str | None = None,
+        envelope_digest_hex: str | None = None,
+    ) -> None:
+        # request_id/route_id/subject_agent_id/envelope_digest_hex accepted
+        # for interface parity with SQLiteNonceStore (replay_ledger.py),
+        # which persists them for audit purposes. The in-memory store does
+        # not need them for its own replay decision, which -- like the
+        # durable store -- is keyed strictly on (producer_id, nonce).
         key = (producer_id, nonce)
         self._prune(timestamp, max_skew)
         if key in self._seen:
@@ -208,7 +232,16 @@ def verify_authenticated_submission(
     if submitted_at < now - max_skew:
         raise TimestampWindowError(f"timestamp {envelope['timestamp']} is outside the acceptance window")
 
-    nonce_store.check_and_record(entry.producer_id, envelope["nonce"], submitted_at, max_skew)
+    nonce_store.check_and_record(
+        entry.producer_id,
+        envelope["nonce"],
+        submitted_at,
+        max_skew,
+        request_id=envelope.get("request_id"),
+        route_id=envelope.get("route_id"),
+        subject_agent_id=envelope.get("subject_agent_id"),
+        envelope_digest_hex=digest.hex(),
+    )
 
     return AuthenticatedSubmissionResult(
         producer_id=entry.producer_id,
@@ -219,3 +252,11 @@ def verify_authenticated_submission(
         envelope_digest_hex=digest.hex(),
         submission_provenance="authenticated_claim",
     )
+
+
+# Re-exported here (not defined in this module) so call sites can do
+# `from authenticated_submission import SQLiteNonceStore` alongside the
+# in-memory NonceStore, without needing to know it lives in a separate file.
+# Imported at the end of the module, after every exception class above is
+# defined, because replay_ledger.py imports back from this module.
+from replay_ledger import SQLiteNonceStore  # noqa: E402

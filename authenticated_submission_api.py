@@ -24,15 +24,20 @@ from pydantic import BaseModel, Field
 
 from authenticated_submission import (
     AuthenticatedSubmissionError,
-    NonceStore,
+    NonceStoreUnavailableError,
+    SQLiteNonceStore,
     verify_authenticated_submission,
 )
 from producer_registry import ProducerRegistryError, load_pinned_registry
 
 # verify_authenticated_submission raises either an AuthenticatedSubmissionError
-# (envelope/signature/timestamp/nonce problems) or a ProducerRegistryError
-# (unknown/lifecycle/scope problems, surfaced via resolve_and_authorize_producer)
-# -- both are caller/producer-side rejections, mapped to 401 the same way.
+# (envelope/signature/timestamp/nonce problems, including a ledger that
+# cannot commit -- NonceStoreUnavailableError is itself an
+# AuthenticatedSubmissionError subclass so an unavailable replay ledger
+# fails closed here the same as any other rejection) or a
+# ProducerRegistryError (unknown/lifecycle/scope problems, surfaced via
+# resolve_and_authorize_producer) -- both are caller/producer-side
+# rejections, mapped to 401 the same way.
 _REJECTION_ERRORS = (AuthenticatedSubmissionError, ProducerRegistryError)
 
 router = APIRouter()
@@ -43,10 +48,33 @@ AUTHENTICATED_SUBMISSION_LEDGER = BASE_DIR / "attest_authenticated_submissions_m
 REGISTRY_PATH_ENV = "PRODUCER_REGISTRY_PATH"
 REGISTRY_SHA256_ENV = "PRODUCER_REGISTRY_SHA256"
 
-# Process-lifetime nonce store. Replaced with a persisted store before any
-# live deployment (see NonceStore docstring) -- not done in this
-# implementation-and-test-only phase.
-_nonce_store = NonceStore()
+# Durable, restart-surviving replay ledger (Phase C follow-up: resolves
+# deployment-readiness Blocking Finding 2, "replay protection does not
+# survive a process restart"). Path follows the same convention as this
+# service's other durable state (the *_master.jsonl files alongside it) --
+# a single file, directly under BASE_DIR, not under any tmp/ephemeral
+# location. Overridable via env var for tests/deployment flexibility, but
+# defaults to a real on-disk path so the module is never accidentally
+# imported with an in-memory-only store in production.
+NONCE_LEDGER_PATH_ENV = "AUTHENTICATED_SUBMISSION_NONCE_LEDGER_PATH"
+_default_nonce_ledger_path = BASE_DIR / "attest_authenticated_nonce_ledger.sqlite3"
+
+# Lazily constructed (not at import time): importing this module must never
+# touch disk under BASE_DIR, which is the production data directory --
+# tests import this module freely and must never create a real ledger file
+# there. `_get_nonce_store()` is the only production call site; tests
+# monkeypatch the module-level `_nonce_store` attribute directly to a
+# tmp_path-scoped store before any request is handled, which short-circuits
+# the lazy construction below entirely.
+_nonce_store: SQLiteNonceStore | None = None
+
+
+def _get_nonce_store() -> SQLiteNonceStore:
+    global _nonce_store
+    if _nonce_store is None:
+        path = os.environ.get(NONCE_LEDGER_PATH_ENV, str(_default_nonce_ledger_path))
+        _nonce_store = SQLiteNonceStore(path)
+    return _nonce_store
 
 
 class AuthenticatedSubmissionEnvelope(BaseModel):
@@ -117,7 +145,7 @@ def submit_authenticated_evidence(envelope: AuthenticatedSubmissionEnvelope) -> 
         result = verify_authenticated_submission(
             envelope.model_dump(),
             registry=registry,
-            nonce_store=_nonce_store,
+            nonce_store=_get_nonce_store(),
         )
     except _REJECTION_ERRORS as exc:
         raise HTTPException(status_code=401, detail=f"{type(exc).__name__}: {exc}") from exc

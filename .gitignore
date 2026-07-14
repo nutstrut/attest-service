@@ -18,3 +18,9 @@ reports/sar402-demo/runs/
 # SAR-402 Path B local development credentials — never committed
 .local-credentials/
 dev/path-b-local/.env.local
+
+# Durable authenticated-submission replay ledger (SQLite) — runtime state,
+# never committed, same discipline as *_master.jsonl above.
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm

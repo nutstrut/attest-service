@@ -26,7 +26,7 @@ from tests._auth_fixtures import build_signed_envelope, make_keypair, producer_e
 @pytest.fixture(autouse=True)
 def _isolated_ledger(tmp_path, monkeypatch):
     monkeypatch.setattr(api, "AUTHENTICATED_SUBMISSION_LEDGER", tmp_path / "authenticated_submissions.jsonl")
-    monkeypatch.setattr(api, "_nonce_store", api.NonceStore())
+    monkeypatch.setattr(api, "_nonce_store", api.SQLiteNonceStore(tmp_path / "nonce_ledger.sqlite3"))
     monkeypatch.delenv(api.REGISTRY_PATH_ENV, raising=False)
     monkeypatch.delenv(api.REGISTRY_SHA256_ENV, raising=False)
 
