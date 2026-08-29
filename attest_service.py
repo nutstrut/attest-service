@@ -38,6 +38,58 @@ SAR_URL = "http://127.0.0.1:3001/settlement-witness"
 HTTP_TIMEOUT_SECONDS = 15
 DEFAULT_LIMIT = 50
 MAX_LIMIT = 200
+
+# --- Public homepage demo-receipt boundary (Phase 2 homepage repair) -------
+#
+# The public browser previously POSTed directly to /settlement-witness/attest
+# with no credential. That endpoint now requires a D31-enrolled caller key
+# (sw_auth.authenticate_request), so the unauthenticated public demo has
+# returned 401 since the auth gate went live. This route is the fix: a
+# same-origin, server-side proxy that issues one fixed, bounded demo request
+# using attest-service's OWN already-enrolled "attest-service" caller
+# credential (SETTLEMENT_ATTEST_API_KEY). No new credential is created for
+# this route, and the browser never sees any bearer material.
+#
+# Everything about the demo request is fixed server-side:
+#   - agent_id is always "demo-agent" (never caller-supplied)
+#   - spec.checks is always the single canonical field_equals fixture
+#   - output is always the fixture deliverable that satisfies that check
+# The only optional caller input is an opaque idempotency-style label that
+# is never interpolated into the request sent upstream.
+DEMO_AGENT_ID = "demo-agent"
+DEMO_COUNTERPARTY = "demo-counterparty"
+DEMO_TASK_ID = "homepage-demo-receipt"
+DEMO_SPEC = {"checks": [{"kind": "field_equals", "inputs": {"output_path": "$.deliverable"}, "expected": "hello"}]}
+DEMO_OUTPUT = {"deliverable": "hello"}
+
+# Bounded, in-process abuse control. This is defense in depth alongside the
+# nginx limit_req zone applied to the public route in front of this service
+# -- not a replacement for it, and not an account/session system.
+DEMO_RATE_LIMIT_WINDOW_SECONDS = 60
+DEMO_RATE_LIMIT_MAX_PER_IP = 5
+_demo_rate_state: dict[str, list[float]] = {}
+
+
+def _demo_rate_limited(client_ip: str, *, now: float | None = None) -> bool:
+    """Returns True if this client_ip has exceeded the bounded per-IP demo
+    issuance rate and the request must be rejected."""
+    now = time.time() if now is None else now
+    cutoff = now - DEMO_RATE_LIMIT_WINDOW_SECONDS
+    hits = [t for t in _demo_rate_state.get(client_ip, []) if t >= cutoff]
+    limited = len(hits) >= DEMO_RATE_LIMIT_MAX_PER_IP
+    if not limited:
+        hits.append(now)
+    _demo_rate_state[client_ip] = hits
+    return limited
+
+
+def _demo_client_ip(request: Request) -> str:
+    forwarded = request.headers.get("x-forwarded-for") if request is not None else None
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if (request is not None and request.client) else "unknown"
+
+
 DEFAULT_EXTERNAL_VERIFIER = "Default Settlement"
 
 ActivationStage = Literal["registered", "activated", "activation_failed", "verified", "chained", "continuous"]
@@ -916,6 +968,47 @@ class ContinuityPairInput(BaseModel):
 @app.get("/healthz")
 def healthz():
     return {"ok": True, "service": SERVICE, "version": VERSION}
+
+
+@app.post("/v1/demo-receipt")
+def demo_receipt(request: Request = None):
+    """Public homepage 'Issue a live receipt' backend. Bounded, fixed-shape,
+    fixed-identity demo issuance -- see the module-level comment above
+    DEMO_AGENT_ID. Accepts no request body; there is nothing for a public
+    caller to influence about the resulting receipt."""
+    client_ip = _demo_client_ip(request)
+    if _demo_rate_limited(client_ip):
+        raise HTTPException(status_code=429, detail={"result": "RATE_LIMITED"})
+
+    sar_payload = {
+        "task_id": DEMO_TASK_ID,
+        "agent_id": DEMO_AGENT_ID,
+        "counterparty": DEMO_COUNTERPARTY,
+        "spec": DEMO_SPEC,
+        "output": DEMO_OUTPUT,
+    }
+    try:
+        sar = post_json(SAR_URL, sar_payload, headers=_settlement_attest_auth_headers())
+    except HTTPException as exc:
+        # Never surface upstream body (could carry internal detail); a
+        # generic bounded failure is all a public demo caller needs.
+        raise HTTPException(status_code=502, detail={"result": "DEMO_ISSUANCE_FAILED"}) from exc
+
+    receipt_id = sar.get("receipt_id")
+    if not receipt_id:
+        raise HTTPException(status_code=502, detail={"result": "DEMO_ISSUANCE_FAILED"})
+
+    return {
+        "service": SERVICE,
+        "version": VERSION,
+        "agent_id": DEMO_AGENT_ID,
+        "receipt_id": receipt_id,
+        "verdict": sar.get("verdict"),
+        "reason_code": sar.get("reason_code"),
+        "verifier_kid": sar.get("verifier_kid"),
+        "ts": sar.get("ts"),
+        "sig": sar.get("sig"),
+    }
 
 
 @app.post("/v1/attest")

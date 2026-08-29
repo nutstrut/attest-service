@@ -104,9 +104,14 @@ def test_all_three_sar_call_sites_use_the_auth_helper():
         lines = f.readlines()
 
     call_site_lines = [
-        i + 1 for i, line in enumerate(lines) if "post_json(SAR_URL, sar_payload" in line
+        i + 1 for i, line in enumerate(lines) if "post_json(SAR_URL," in line and "sar_payload" in line
     ]
-    assert len(call_site_lines) == 3, f"expected exactly 3 SAR_URL call sites, found {call_site_lines}"
+    # 3 original D31-authenticated routes + the bounded public demo route,
+    # all sharing the same SAR_URL (the demo route must NOT use a different
+    # settlement-witness endpoint -- see the 2026-08-29 rollback: pointing it
+    # at SAR_URL + "/attest" hit a different, JWS-wrapped response shape with
+    # no top-level receipt_id and caused false-negative failures).
+    assert len(call_site_lines) == 4, f"expected exactly 4 SAR_URL call sites, found {call_site_lines}"
     for line_no in call_site_lines:
         assert "headers=_settlement_attest_auth_headers()" in lines[line_no - 1], (
             f"call site at line {line_no} is missing the D31 auth headers"
