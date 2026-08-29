@@ -75,7 +75,7 @@ def _internal_request() -> Request:
 
 
 def _fake_post_json(continuity_receipt="sha256:" + "1" * 64, sar_receipt="sha256:" + "2" * 64, verdict="PASS"):
-    def fake(url, payload):
+    def fake(url, payload, *, headers=None):
         if url == svc.CONTINUITY_EVALUATE_URL:
             return {"receipt_id": continuity_receipt}
         if url == svc.SAR_URL:

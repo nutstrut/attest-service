@@ -87,7 +87,7 @@ def test_attest_handler_forwards_executor_id_to_write_chain(tmp_path, monkeypatc
     monkeypatch.setattr(svc, "CHAIN_LEDGER", chain_path)
     monkeypatch.setattr(svc, "RECEIPT_LEDGER", receipt_path)
 
-    def fake_post_json(url, payload):
+    def fake_post_json(url, payload, *, headers=None):
         if url == svc.CONTINUITY_EVALUATE_URL:
             return {"receipt_id": "sha256:" + "1" * 64}
         if url == svc.SAR_URL:

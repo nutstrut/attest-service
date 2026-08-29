@@ -364,8 +364,8 @@ def sorted_agents(records: list[dict[str, Any]], limit: int) -> list[dict[str, A
     )[:limit]
 
 
-def post_json(url: str, payload: dict[str, Any]) -> dict[str, Any]:
-    resp = requests.post(url, json=payload, timeout=HTTP_TIMEOUT_SECONDS)
+def post_json(url: str, payload: dict[str, Any], *, headers: dict[str, str] | None = None) -> dict[str, Any]:
+    resp = requests.post(url, json=payload, headers=headers, timeout=HTTP_TIMEOUT_SECONDS)
     try:
         data = resp.json()
     except ValueError:
@@ -384,6 +384,20 @@ def get_json(url: str) -> dict[str, Any]:
     if resp.status_code >= 400:
         raise HTTPException(status_code=502, detail=data)
     return data
+
+# STAGING-ONLY PROPOSED CHANGE (D31/attest-auth OPMA): builds the caller
+# credential this service presents to POST /settlement-witness/attest, per
+# the D31 minimum auth model. SETTLEMENT_ATTEST_API_KEY is read from this
+# process's own environment; no key value is hardcoded or committed
+# anywhere. Unconditional -- if the env var is unset the header carries an
+# empty bearer token, which the server-side check rejects (fail closed),
+# never a silently-omitted header.
+def _settlement_attest_auth_headers() -> dict[str, str]:
+    return {
+        "Authorization": f"Bearer {_os.environ.get('SETTLEMENT_ATTEST_API_KEY', '')}",
+        "X-Settlement-Timestamp": str(int(time.time())),
+        "X-Settlement-Nonce": uuid4().hex,
+    }
 
 
 def stage_at_least(stage: str, minimum: str) -> bool:
@@ -916,7 +930,7 @@ def attest(input: SyncAttestInput, request: Request = None):
     sar_payload["continuity_receipt_id"] = continuity_receipt_id
     sar_payload["receipt_context"] = input.receipt_context
     external_provenance = external_provenance_from_payload(sar_input=sar_payload, continuity_input=input.continuity_input)
-    sar = post_json(SAR_URL, sar_payload)
+    sar = post_json(SAR_URL, sar_payload, headers=_settlement_attest_auth_headers())
     sar_receipt_id = sar.get("receipt_id")
     if not sar_receipt_id:
         raise HTTPException(status_code=502, detail="settlement-witness receipt_id missing")
@@ -1032,7 +1046,7 @@ def complete(input: CompleteInput, request: Request = None):
     sar_payload["receipt_context"] = receipt_context
     external_provenance = external_provenance_from_payload(sar_input=sar_payload) or session.get("external_provenance")
 
-    sar = post_json(SAR_URL, sar_payload)
+    sar = post_json(SAR_URL, sar_payload, headers=_settlement_attest_auth_headers())
     sar_receipt_id = sar.get("receipt_id")
     if not sar_receipt_id:
         raise HTTPException(status_code=502, detail="settlement-witness receipt_id missing")
@@ -1721,7 +1735,7 @@ def activate_agent(agent_id: str, input: ActivateAgentInput, request: Request = 
             "continuity_receipt_id": continuity_receipt_id,
         }
         external_provenance = external_provenance_from_payload(sar_input=sar_payload, continuity_input=continuity_input)
-        sar = post_json(SAR_URL, sar_payload)
+        sar = post_json(SAR_URL, sar_payload, headers=_settlement_attest_auth_headers())
         sar_receipt_id = sar.get("receipt_id")
         if not sar_receipt_id:
             raise HTTPException(status_code=502, detail="settlement-witness receipt_id missing")
